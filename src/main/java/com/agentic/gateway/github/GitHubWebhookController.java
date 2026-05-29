@@ -50,7 +50,12 @@ public class GitHubWebhookController {
     }
 
     private void publishGitHubTask(GitHubTaskPayload payload) {
-        DevTask task = DevTask.create(TaskSource.GITHUB, TargetEngine.DEFAULT, payload.toTaskText());
+        DevTask task = DevTask.create(
+                TaskSource.GITHUB,
+                TargetEngine.DEFAULT,
+                payload.toTaskText(),
+                payload.projectItemId()
+        );
         devTaskPublisher.publishAsync(task)
                 .exceptionally(ex -> {
                     log.error("Failed to publish GitHub DevTask. taskId={}", task.taskId(), ex);

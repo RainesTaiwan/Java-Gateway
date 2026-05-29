@@ -7,12 +7,16 @@ import com.agentic.gateway.jms.DevTaskPublisher;
 import com.agentic.gateway.task.CommandParser;
 import com.agentic.gateway.task.ParsedCommand;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Message;
+import org.telegram.telegrambots.meta.api.objects.User;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+
+import java.util.concurrent.Executor;
 
 /**
  * Telegram Long Polling 接收端。
@@ -29,21 +33,28 @@ public class TelegramCommandBot extends TelegramLongPollingBot {
     private final TelegramBotProperties telegramBotProperties;
     private final CommandParser commandParser;
     private final DevTaskPublisher devTaskPublisher;
+    private final Executor telegramReplyExecutor;
 
     public TelegramCommandBot(
             TelegramBotProperties telegramBotProperties,
             CommandParser commandParser,
-            DevTaskPublisher devTaskPublisher
+            DevTaskPublisher devTaskPublisher,
+            @Qualifier("telegramReplyExecutor") Executor telegramReplyExecutor
     ) {
         super(telegramBotProperties.token());
         this.telegramBotProperties = telegramBotProperties;
         this.commandParser = commandParser;
         this.devTaskPublisher = devTaskPublisher;
+        this.telegramReplyExecutor = telegramReplyExecutor;
     }
 
     @Override
     public String getBotUsername() {
         return telegramBotProperties.username();
+    }
+
+    public Long getAllowedUserId() {
+        return telegramBotProperties.allowedUserId();
     }
 
     @Override
@@ -53,9 +64,16 @@ public class TelegramCommandBot extends TelegramLongPollingBot {
         }
 
         Message message = update.getMessage();
+        log.info("Received Telegram text message. telegramUserId={}, chatId={}",
+                message.getFrom() == null ? null : message.getFrom().getId(),
+                message.getChatId());
         if (!isAllowedUser(message)) {
-            log.warn("Rejected Telegram message from unauthorized user. telegramUserId={}",
-                    message.getFrom() == null ? null : message.getFrom().getId());
+            User from = message.getFrom();
+            log.warn("Rejected Telegram message from unauthorized user. telegramUserId={}, firstName={}, lastName={}, userName={}",
+                    from == null ? null : from.getId(),
+                    from == null ? null : from.getFirstName(),
+                    from == null ? null : from.getLastName(),
+                    from == null ? null : from.getUserName());
             return;
         }
 
@@ -66,8 +84,10 @@ public class TelegramCommandBot extends TelegramLongPollingBot {
         }
 
         DevTask task = DevTask.create(TaskSource.TELEGRAM, parsedCommand.targetEngine(), parsedCommand.payload());
+        log.info("Scheduling Telegram DevTask. taskId={}, targetEngine={}",
+                task.taskId(), task.targetEngine());
         devTaskPublisher.publishAsync(task)
-                .thenRun(() -> sendAcceptedMessageAsync(message.getChatId()))
+                .thenRunAsync(() -> sendAcceptedMessageAsync(message.getChatId()), telegramReplyExecutor)
                 .exceptionally(ex -> {
                     log.error("Failed to publish Telegram DevTask. taskId={}", task.taskId(), ex);
                     return null;
@@ -95,8 +115,8 @@ public class TelegramCommandBot extends TelegramLongPollingBot {
 
         try {
             executeAsync(response);
-        } catch (TelegramApiException ex) {
-            log.error("Failed to send Telegram acknowledgement. chatId={}", chatId, ex);
+        } catch (TelegramApiException | RuntimeException ex) {
+            log.error("Failed to send Telegram acknowledgement asynchronously. chatId={}", chatId, ex);
         }
     }
 }

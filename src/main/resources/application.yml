@@ -3,7 +3,7 @@ spring:
     name: java-gateway
 
   activemq:
-    # ActiveMQ broker 連線位置；本機開發預設連到 localhost。
+    # ActiveMQ broker 連線位置；Docker Compose 內會由 ACTIVEMQ_BROKER_URL 覆蓋為 tcp://activemq:61616。
     broker-url: ${ACTIVEMQ_BROKER_URL:tcp://localhost:61616}
     # 若 rmohr/activemq:5.15.9 需要帳密，請透過環境變數覆蓋。
     user: ${ACTIVEMQ_USER:admin}
@@ -11,6 +11,13 @@ spring:
 
   jms:
     pub-sub-domain: false
+    listener:
+      # Orchestrator 消費端採 CLIENT_ACKNOWLEDGE；只有任務成功交給狀態機後才手動 acknowledge。
+      acknowledge-mode: client
+
+# 啟用 telegrambots-spring-boot-starter 的 Long Polling 自動註冊。
+telegrambots:
+  enabled: true
 
 telegram:
   bot:
@@ -25,11 +32,51 @@ github:
   webhook:
     # GitHub Webhook Secret；請勿在此檔案填入真實值。
     secret: ${GITHUB_WEBHOOK_SECRET:}
+  project:
+    # GitHub PAT，需具備讀寫 Projects v2 的權限；請只透過環境變數注入。
+    token: ${GITHUB_TOKEN:}
+    # GitHub Projects v2 的 Project node ID，例如 PVT_xxx。
+    project-id: ${PROJECT_ID:}
+    status-field:
+      # Status 單選欄位 ID，例如 PVTSSF_xxx。
+      field-id: ${PROJECT_STATUS_FIELD_ID:}
+      # 下列 option ID 需由 GitHub GraphQL 查出，名稱只是本系統映射語意。
+      in-progress-option-id: ${PROJECT_STATUS_IN_PROGRESS_OPTION_ID:}
+      verifying-option-id: ${PROJECT_STATUS_VERIFYING_OPTION_ID:}
+      retrying-option-id: ${PROJECT_STATUS_RETRYING_OPTION_ID:}
+      done-option-id: ${PROJECT_STATUS_DONE_OPTION_ID:}
+      failed-option-id: ${PROJECT_STATUS_FAILED_OPTION_ID:}
+    api:
+      graphql-url: ${GITHUB_GRAPHQL_URL:https://api.github.com/graphql}
+      timeout-seconds: ${GITHUB_GRAPHQL_TIMEOUT_SECONDS:10}
 
 gateway:
   jms:
     # 下游 Agentic Engineering Orchestrator 監聽的指令佇列。
     command-queue: ${DEV_COMMAND_QUEUE:dev.command.queue}
+
+orchestrator:
+  git:
+    # 由 Orchestrator 使用 JGit clone / fetch / reset 的目標 repository。
+    repository-uri: ${GIT_REPOSITORY_URI:}
+    branch: ${GIT_BRANCH:main}
+  workspace:
+    # 容器內 JGit 工作目錄，以及 Host 上同一個目錄，後者會掛給 Aider sandbox。
+    container-path: ${ORCHESTRATOR_WORKSPACE_CONTAINER_PATH:/app/workspace}
+    host-path: ${ORCHESTRATOR_WORKSPACE_HOST_PATH:/home/raines/git/Java Gateway/workspace}
+  docker:
+    # DooD 透過掛載 /var/run/docker.sock 控制宿主機 Docker Engine。
+    host: ${DOCKER_HOST:unix:///var/run/docker.sock}
+    network-name: ${DOCKER_NETWORK_NAME:javagateway_default}
+  aider:
+    image: ${AIDER_IMAGE:paulgauthier/aider:latest}
+    model: ${AIDER_MODEL:anthropic/claude-3-5-sonnet-20241022}
+    timeout-seconds: ${AIDER_TIMEOUT_SECONDS:300}
+  ollama:
+    # 地端 LLM 只負責 log 降噪摘要，不參與機密決策。
+    base-url: ${OLLAMA_BASE_URL:http://ollama:11434}
+    model: ${OLLAMA_MODEL:qwen2.5-coder:1.5b}
+    timeout-seconds: ${OLLAMA_TIMEOUT_SECONDS:20}
 
 logging:
   level:

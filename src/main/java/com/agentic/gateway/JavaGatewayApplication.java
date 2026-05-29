@@ -1,7 +1,9 @@
 package com.agentic.gateway;
 
 import com.agentic.gateway.config.GatewayProperties;
+import com.agentic.gateway.config.GitHubProjectProperties;
 import com.agentic.gateway.config.GitHubWebhookProperties;
+import com.agentic.gateway.config.OrchestratorProperties;
 import com.agentic.gateway.config.TelegramBotProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -18,6 +20,8 @@ import org.springframework.scheduling.annotation.EnableAsync;
 @SpringBootApplication
 @EnableConfigurationProperties({
         GatewayProperties.class,
+        GitHubProjectProperties.class,
+        OrchestratorProperties.class,
         TelegramBotProperties.class,
         GitHubWebhookProperties.class
 })

@@ -9,7 +9,8 @@ import java.util.concurrent.Executor;
 /**
  * 非同步任務執行緒池設定。
  *
- * <p>接收端不可等待 JMS 或外部 API I/O，因此所有派發工作都交由此執行緒池處理。</p>
+ * <p>接收端不可等待 JMS 或外部 API I/O，因此 JMS 派發與 Telegram 回覆
+ * 使用不同執行緒池，避免彼此阻塞。</p>
  */
 @Configuration
 public class AsyncConfig {
@@ -21,6 +22,17 @@ public class AsyncConfig {
         executor.setCorePoolSize(4);
         executor.setMaxPoolSize(12);
         executor.setQueueCapacity(500);
+        executor.initialize();
+        return executor;
+    }
+
+    @Bean(name = "telegramReplyExecutor")
+    public Executor telegramReplyExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("telegram-reply-");
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(6);
+        executor.setQueueCapacity(200);
         executor.initialize();
         return executor;
     }
