@@ -12,6 +12,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record OrchestratorProperties(
         Git git,
         Workspace workspace,
+        Agent agent,
+        Cursor cursor,
         Aider aider,
         Docker docker,
         Ollama ollama
@@ -29,10 +31,21 @@ public record OrchestratorProperties(
     ) {
     }
 
+    public record Agent(
+            String engine,
+            Integer timeoutSeconds
+    ) {
+    }
+
+    public record Cursor(
+            String image,
+            String model
+    ) {
+    }
+
     public record Aider(
             String image,
-            String model,
-            Integer timeoutSeconds
+            String model
     ) {
     }
 

@@ -4,8 +4,8 @@ import com.agentic.gateway.dto.DevTask;
 import com.agentic.gateway.orchestrator.git.GitSyncService;
 import com.agentic.gateway.orchestrator.github.GitHubProjectSyncService;
 import com.agentic.gateway.orchestrator.ollama.OllamaNoiseReducer;
-import com.agentic.gateway.orchestrator.sandbox.AiderSandboxResult;
-import com.agentic.gateway.orchestrator.sandbox.AiderSandboxService;
+import com.agentic.gateway.orchestrator.agent.AgentExecutionResult;
+import com.agentic.gateway.orchestrator.agent.AgentExecutionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -31,7 +31,7 @@ public class WorkflowOrchestrator {
 
     private final GitHubProjectSyncService gitHubProjectSyncService;
     private final GitSyncService gitSyncService;
-    private final AiderSandboxService aiderSandboxService;
+    private final AgentExecutionService agentExecutionService;
     private final OllamaNoiseReducer ollamaNoiseReducer;
 
     /**
@@ -54,7 +54,7 @@ public class WorkflowOrchestrator {
         transition(task, projectItemId, TaskState.RECEIVED);
         transition(task, projectItemId, TaskState.IN_PROGRESS);
 
-        // 第一次嘗試前重置為遠端乾淨基線；後續 retry 保留髒工作區讓 Aider 接續修正。
+        // 第一次嘗試前重置為遠端乾淨基線；後續 retry 保留髒工作區讓開發引擎接續修正。
         gitSyncService.syncRepository();
 
         DevTask currentAttempt = task;
@@ -63,10 +63,10 @@ public class WorkflowOrchestrator {
         while (true) {
             int attemptNumber = retryCount + 1;
             transition(task, projectItemId, TaskState.RUNNING);
-            log.info("Starting Aider attempt. taskId={}, attempt={}, maxRetries={}",
-                    task.taskId(), attemptNumber, MAX_RETRIES);
+            log.info("Starting agent attempt. taskId={}, engine={}, attempt={}, maxRetries={}",
+                    task.taskId(), agentExecutionService.engineName(), attemptNumber, MAX_RETRIES);
 
-            AiderSandboxResult sandboxResult = aiderSandboxService.runAider(currentAttempt);
+            AgentExecutionResult sandboxResult = agentExecutionService.runAgent(currentAttempt);
             transition(task, projectItemId, TaskState.VERIFYING);
 
             if (sandboxResult.isSuccess()) {
@@ -88,8 +88,8 @@ public class WorkflowOrchestrator {
 
             String noiseReducedLog = ollamaNoiseReducer.reduceNoise(sandboxResult.logs());
             currentAttempt = taskWithRetryContext(currentAttempt, noiseReducedLog);
-            log.warn("Aider attempt failed; retry scheduled. taskId={}, nextAttempt={}, exitCode={}, timedOut={}, summary={}",
-                    task.taskId(), retryCount + 1, sandboxResult.exitCode(), sandboxResult.timedOut(), noiseReducedLog);
+            log.warn("Agent attempt failed; retry scheduled. taskId={}, engine={}, nextAttempt={}, exitCode={}, timedOut={}, summary={}",
+                    task.taskId(), sandboxResult.engine(), retryCount + 1, sandboxResult.exitCode(), sandboxResult.timedOut(), noiseReducedLog);
         }
     }
 

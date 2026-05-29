@@ -68,10 +68,16 @@ orchestrator:
     # DooD 透過掛載 /var/run/docker.sock 控制宿主機 Docker Engine。
     host: ${DOCKER_HOST:unix:///var/run/docker.sock}
     network-name: ${DOCKER_NETWORK_NAME:javagateway_default}
+  agent:
+    # cursor = Cursor SDK runner（預設）；aider = paulgauthier/aider 映像 + CLAUDE_API_KEY
+    engine: ${AGENT_ENGINE:cursor}
+    timeout-seconds: ${AGENT_TIMEOUT_SECONDS:300}
+  cursor:
+    image: ${CURSOR_RUNNER_IMAGE:java-gateway-cursor-runner:latest}
+    model: ${CURSOR_MODEL:composer-2.5}
   aider:
     image: ${AIDER_IMAGE:paulgauthier/aider:latest}
     model: ${AIDER_MODEL:anthropic/claude-3-5-sonnet-20241022}
-    timeout-seconds: ${AIDER_TIMEOUT_SECONDS:300}
   ollama:
     # 地端 LLM 只負責 log 降噪摘要，不參與機密決策。
     base-url: ${OLLAMA_BASE_URL:http://ollama:11434}

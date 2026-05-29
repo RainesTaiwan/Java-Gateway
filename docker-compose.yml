@@ -10,6 +10,14 @@ services:
       ACTIVEMQ_ADMIN_LOGIN: admin
       ACTIVEMQ_ADMIN_PASSWORD: admin
 
+  # 僅用於 build Cursor SDK runner 映像；容器啟動後立即結束，不常駐。
+  cursor-runner:
+    build:
+      context: ./docker/cursor-runner
+    image: java-gateway-cursor-runner:latest
+    entrypoint: ["true"]
+    restart: "no"
+
   java-gateway:
     build: .
     container_name: java-gateway-app
@@ -23,6 +31,9 @@ services:
       ACTIVEMQ_PASSWORD: admin
       # 未來 Orchestrator 需要呼叫地端 LLM 做 log 降噪時，直接走 Compose 內網服務名。
       OLLAMA_BASE_URL: http://ollama:11434
+      # 預設使用 Cursor；改為 aider 時需設定 CLAUDE_API_KEY。
+      AGENT_ENGINE: ${AGENT_ENGINE:-cursor}
+      CURSOR_RUNNER_IMAGE: ${CURSOR_RUNNER_IMAGE:-java-gateway-cursor-runner:latest}
     volumes:
       # Host 端實體 Git 工作區；未來 Java Orchestrator 可在此 git clone / pull，
       # 並把同一路徑掛載給拋棄式 Aider sandbox。
@@ -33,6 +44,8 @@ services:
     depends_on:
       activemq:
         condition: service_started
+      cursor-runner:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   ollama:
