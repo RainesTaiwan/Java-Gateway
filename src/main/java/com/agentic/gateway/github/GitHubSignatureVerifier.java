@@ -1,6 +1,6 @@
 package com.agentic.gateway.github;
 
-import com.agentic.gateway.config.GatewayProperties;
+import com.agentic.gateway.config.GitHubWebhookProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -26,10 +26,10 @@ public class GitHubSignatureVerifier {
     private static final String SIGNATURE_PREFIX = "sha256=";
     private static final String HMAC_SHA_256 = "HmacSHA256";
 
-    private final GatewayProperties gatewayProperties;
+    private final GitHubWebhookProperties gitHubWebhookProperties;
 
     public boolean isValid(String signatureHeader, String rawPayload) {
-        String secret = gatewayProperties.github().webhookSecret();
+        String secret = gitHubWebhookProperties.secret();
         if (secret == null || secret.isBlank()) {
             log.error("GITHUB_WEBHOOK_SECRET is not configured.");
             return false;

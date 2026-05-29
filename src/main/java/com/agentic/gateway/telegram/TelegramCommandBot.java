@@ -1,6 +1,6 @@
 package com.agentic.gateway.telegram;
 
-import com.agentic.gateway.config.GatewayProperties;
+import com.agentic.gateway.config.TelegramBotProperties;
 import com.agentic.gateway.dto.DevTask;
 import com.agentic.gateway.dto.TaskSource;
 import com.agentic.gateway.jms.DevTaskPublisher;
@@ -26,24 +26,24 @@ public class TelegramCommandBot extends TelegramLongPollingBot {
 
     private static final String ACCEPTED_MESSAGE = "任務已進入排程";
 
-    private final GatewayProperties gatewayProperties;
+    private final TelegramBotProperties telegramBotProperties;
     private final CommandParser commandParser;
     private final DevTaskPublisher devTaskPublisher;
 
     public TelegramCommandBot(
-            GatewayProperties gatewayProperties,
+            TelegramBotProperties telegramBotProperties,
             CommandParser commandParser,
             DevTaskPublisher devTaskPublisher
     ) {
-        super(gatewayProperties.telegram().botToken());
-        this.gatewayProperties = gatewayProperties;
+        super(telegramBotProperties.token());
+        this.telegramBotProperties = telegramBotProperties;
         this.commandParser = commandParser;
         this.devTaskPublisher = devTaskPublisher;
     }
 
     @Override
     public String getBotUsername() {
-        return gatewayProperties.telegram().botUsername();
+        return telegramBotProperties.username();
     }
 
     @Override
@@ -81,7 +81,7 @@ public class TelegramCommandBot extends TelegramLongPollingBot {
         if (message.getFrom() == null || message.getFrom().getId() == null) {
             return false;
         }
-        return message.getFrom().getId().equals(gatewayProperties.telegram().allowedUserId());
+        return message.getFrom().getId().equals(telegramBotProperties.allowedUserId());
     }
 
     /**

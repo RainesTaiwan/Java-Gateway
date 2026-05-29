@@ -2,3 +2,11 @@ target/
 *.log
 .idea/
 *.iml
+
+# 本機敏感設定檔，請勿提交 Telegram token、GitHub webhook secret 或 broker 密碼。
+.env
+.env.*
+!.env.example
+src/main/resources/application-local.yml
+src/main/resources/application-secret.yml
+src/main/resources/application-*.local.yml
