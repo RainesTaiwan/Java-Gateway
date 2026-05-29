@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: java-gateway
+
+  activemq:
+    broker-url: ${ACTIVEMQ_BROKER_URL:tcp://localhost:61616}
+    user: ${ACTIVEMQ_USER:admin}
+    password: ${ACTIVEMQ_PASSWORD:admin}
+
+  jms:
+    pub-sub-domain: false
+
+gateway:
+  telegram:
+    # Telegram BotFather 提供的 Bot 名稱，例如 agentic_gateway_bot。
+    bot-username: ${TELEGRAM_BOT_USERNAME:}
+    # Telegram BotFather 提供的 Token，請務必只透過環境變數注入。
+    bot-token: ${TELEGRAM_BOT_TOKEN:}
+    # 僅允許此 Telegram 使用者 ID 下達任務；不符合者會被丟棄且不進入佇列。
+    allowed-user-id: ${ALLOWED_TELEGRAM_USER_ID:0}
+
+  github:
+    # GitHub Webhook Secret，用於驗證 X-Hub-Signature-256。
+    webhook-secret: ${GITHUB_WEBHOOK_SECRET:}
+
+  jms:
+    # 下游 Agentic Engineering Orchestrator 監聽的指令佇列。
+    command-queue: ${DEV_COMMAND_QUEUE:dev.command.queue}
+
+logging:
+  level:
+    com.agentic.gateway: INFO
