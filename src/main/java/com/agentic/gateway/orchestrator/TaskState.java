@@ -14,6 +14,11 @@ public enum TaskState {
     RECEIVED,
 
     /**
+     * 地端 LLM 正在將原始需求拆解成較小、可執行的子任務計畫。
+     */
+    PLANNING,
+
+    /**
      * 任務已被 Orchestrator 接手，準備同步 GitHub 看板與本地工作區。
      */
     IN_PROGRESS,

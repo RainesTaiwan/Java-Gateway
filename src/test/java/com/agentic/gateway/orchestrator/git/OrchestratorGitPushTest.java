@@ -13,7 +13,10 @@ import java.time.Instant;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
- * 手動驗證 Orchestrator 使用的 JGit commit/push 路徑（需設定 GITHUB_TOKEN）。
+ * 手動驗證 Orchestrator 使用的 JGit commit/push 路徑。
+ *
+ * <p>此測試會真的 push 到遠端，預設不執行；需同時設定
+ * {@code RUN_ORCHESTRATOR_GIT_PUSH_TEST=true} 與 {@code GITHUB_TOKEN}。</p>
  */
 @SpringBootTest
 @TestPropertySource(properties = {
@@ -21,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
         "orchestrator.git.repository-uri=${GIT_REPOSITORY_URI:}",
         "orchestrator.git.branch=${GIT_BRANCH:master}"
 })
+@EnabledIfEnvironmentVariable(named = "RUN_ORCHESTRATOR_GIT_PUSH_TEST", matches = "true")
 @EnabledIfEnvironmentVariable(named = "GITHUB_TOKEN", matches = ".+")
 class OrchestratorGitPushTest {
 

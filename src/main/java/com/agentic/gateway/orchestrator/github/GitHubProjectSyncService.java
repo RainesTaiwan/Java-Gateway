@@ -129,7 +129,7 @@ public class GitHubProjectSyncService {
     private Optional<String> resolveStatusOptionId(TaskState state) {
         GitHubProjectProperties.StatusField statusField = gitHubProjectProperties.statusField();
         return switch (state) {
-            case RECEIVED, IN_PROGRESS, RUNNING -> Optional.ofNullable(statusField.inProgressOptionId());
+            case RECEIVED, PLANNING, IN_PROGRESS, RUNNING -> Optional.ofNullable(statusField.inProgressOptionId());
             case VERIFYING -> Optional.ofNullable(statusField.verifyingOptionId());
             case RETRYING -> Optional.ofNullable(statusField.retryingOptionId());
             case SUCCESS -> Optional.ofNullable(statusField.doneOptionId());

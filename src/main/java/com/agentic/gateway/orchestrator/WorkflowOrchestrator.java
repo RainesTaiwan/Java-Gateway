@@ -7,6 +7,7 @@ import com.agentic.gateway.orchestrator.agent.AgentExecutionService;
 import com.agentic.gateway.orchestrator.git.GitSyncService;
 import com.agentic.gateway.orchestrator.github.GitHubProjectSyncService;
 import com.agentic.gateway.orchestrator.ollama.OllamaNoiseReducer;
+import com.agentic.gateway.orchestrator.ollama.TaskSplitterService;
 import com.agentic.gateway.orchestrator.telegram.TelegramCompletionNotifier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,6 +38,7 @@ public class WorkflowOrchestrator {
     private final GitSyncService gitSyncService;
     private final AgentExecutionService agentExecutionService;
     private final OllamaNoiseReducer ollamaNoiseReducer;
+    private final TaskSplitterService taskSplitterService;
     private final TelegramCompletionNotifier telegramCompletionNotifier;
 
     /**
@@ -58,12 +60,16 @@ public class WorkflowOrchestrator {
         }
 
         transition(task, projectItemId, TaskState.RECEIVED);
+        transition(task, projectItemId, TaskState.PLANNING);
+        String plannedSpec = taskSplitterService.splitTask(task.payload());
+        log.info("Task split plan generated. taskId={}, plan=\n{}", task.taskId(), truncateLog(plannedSpec));
+
         transition(task, projectItemId, TaskState.IN_PROGRESS);
 
         // 第一次嘗試前重置為遠端乾淨基線；後續 retry 保留髒工作區讓開發引擎接續修正。
         gitSyncService.syncRepository();
 
-        DevTask currentAttempt = task;
+        DevTask currentAttempt = taskWithPlannedSpec(task, plannedSpec);
         int retryCount = 0;
 
         while (true) {
@@ -151,6 +157,30 @@ public class WorkflowOrchestrator {
             return normalized;
         }
         return normalized.substring(0, LOG_SUMMARY_LIMIT) + "\n... (truncated)";
+    }
+
+    private DevTask taskWithPlannedSpec(DevTask task, String plannedSpec) {
+        String originalPayload = task.payload() == null ? "" : task.payload();
+        String effectivePlan = plannedSpec == null || plannedSpec.isBlank() ? originalPayload : plannedSpec;
+        String optimizedPayload = """
+                你必須直接修改 repository 內的檔案，不要只輸出規劃，也不要要求使用者再次確認。
+
+                原始需求：
+                %s
+
+                地端架構師拆解後執行規格：
+                %s
+                """.formatted(originalPayload, effectivePlan);
+
+        return new DevTask(
+                task.taskId(),
+                task.source(),
+                task.targetEngine(),
+                optimizedPayload,
+                task.projectItemId(),
+                task.telegramChatId(),
+                task.createdAt()
+        );
     }
 
     private DevTask taskWithRetryContext(DevTask task, String noiseReducedLog) {

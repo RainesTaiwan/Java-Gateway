@@ -34,6 +34,9 @@ services:
       # 預設使用 Cursor；改為 aider 時需設定 CLAUDE_API_KEY。
       AGENT_ENGINE: ${AGENT_ENGINE:-cursor}
       CURSOR_RUNNER_IMAGE: ${CURSOR_RUNNER_IMAGE:-java-gateway-cursor-runner:latest}
+      GIT_REPOSITORY_URI: ${GIT_REPOSITORY_URI:-}
+      GIT_BRANCH: ${GIT_BRANCH:-master}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     volumes:
       # Host 端實體 Git 工作區；未來 Java Orchestrator 可在此 git clone / pull，
       # 並把同一路徑掛載給拋棄式 Aider sandbox。
