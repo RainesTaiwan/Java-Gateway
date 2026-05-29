@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.ResetCommand;
+import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.transport.CredentialsProvider;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.springframework.stereotype.Service;
@@ -53,6 +54,75 @@ public class GitSyncService {
             return workspace;
         } catch (Exception ex) {
             throw new IllegalStateException("Git workspace 同步失敗: " + workspace, ex);
+        }
+    }
+
+    /**
+     * 檢查 Agent 執行後是否留下實質 Git 變更。
+     *
+     * @param workspacePath Git workspace 路徑
+     * @return 是否存在 modified、untracked、staged、deleted 或 conflicting 檔案
+     */
+    public boolean hasChanges(String workspacePath) {
+        Path workspace = Path.of(requireText(workspacePath, "workspacePath"));
+        try (Git git = Git.open(workspace.toFile())) {
+            Status status = git.status().call();
+            boolean hasChanges = !status.getAdded().isEmpty()
+                    || !status.getChanged().isEmpty()
+                    || !status.getModified().isEmpty()
+                    || !status.getRemoved().isEmpty()
+                    || !status.getMissing().isEmpty()
+                    || !status.getUntracked().isEmpty()
+                    || !status.getUntrackedFolders().isEmpty()
+                    || !status.getConflicting().isEmpty();
+            log.info("Git diff check completed. workspace={}, hasChanges={}, added={}, changed={}, modified={}, removed={}, missing={}, untracked={}, untrackedFolders={}",
+                    workspace,
+                    hasChanges,
+                    status.getAdded().size(),
+                    status.getChanged().size(),
+                    status.getModified().size(),
+                    status.getRemoved().size(),
+                    status.getMissing().size(),
+                    status.getUntracked().size(),
+                    status.getUntrackedFolders().size());
+            return hasChanges;
+        } catch (Exception ex) {
+            throw new IllegalStateException("Git diff 檢查失敗: " + workspace, ex);
+        }
+    }
+
+    /**
+     * 將通過交付檢查的變更 commit 並 push 回遠端分支。
+     */
+    public void commitAndPush(String taskId) {
+        Path workspace = Path.of(orchestratorProperties.workspace().containerPath());
+        String branch = normalizeBranch(orchestratorProperties.git().branch());
+        String message = "chore(ai): auto-implementation for task [" + taskId + "]";
+
+        try (Git git = Git.open(workspace.toFile())) {
+            git.add()
+                    .addFilepattern(".")
+                    .call();
+            git.add()
+                    .setUpdate(true)
+                    .addFilepattern(".")
+                    .call();
+
+            git.commit()
+                    .setMessage(message)
+                    .setAuthor("Java Gateway AI", "java-gateway-ai@users.noreply.github.com")
+                    .setCommitter("Java Gateway AI", "java-gateway-ai@users.noreply.github.com")
+                    .call();
+
+            git.push()
+                    .setRemote("origin")
+                    .setCredentialsProvider(resolveCredentialsProvider())
+                    .add("refs/heads/" + branch)
+                    .call();
+
+            log.info("Git commit and push completed. taskId={}, branch={}, message={}", taskId, branch, message);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Git commit/push 失敗: " + workspace, ex);
         }
     }
 

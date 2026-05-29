@@ -24,6 +24,17 @@ public class CursorAgentExecutionService implements AgentExecutionService {
 
     private static final String ENGINE = "cursor";
     private static final String WORKDIR = "/app";
+    private static final String DELIVERY_PROMPT_TEMPLATE = """
+            You are running inside the local repository mounted at /app.
+
+            Complete the user's request by directly editing files in this repository.
+            Do not only explain what should be changed.
+            If the request is impossible or unsafe, explain why clearly.
+            After editing, summarize the files changed and the reason.
+
+            User request:
+            %s
+            """;
 
     private final OrchestratorProperties orchestratorProperties;
     private final DockerAgentRunner dockerAgentRunner;
@@ -51,7 +62,7 @@ public class CursorAgentExecutionService implements AgentExecutionService {
             environment.add("CURSOR_API_KEY=" + apiKey);
         }
         environment.add("CURSOR_MODEL=" + orchestratorProperties.cursor().model());
-        String payload = task.payload() == null ? "" : task.payload();
+        String payload = DELIVERY_PROMPT_TEMPLATE.formatted(task.payload() == null ? "" : task.payload());
         environment.add("AGENT_PROMPT_B64="
                 + Base64.getEncoder().encodeToString(payload.getBytes(StandardCharsets.UTF_8)));
         return environment;

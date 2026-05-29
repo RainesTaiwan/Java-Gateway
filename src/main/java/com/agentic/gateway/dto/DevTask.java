@@ -11,6 +11,7 @@ import java.util.UUID;
  * @param targetEngine 目標執行引擎
  * @param payload      使用者指令、Issue 標題或 Issue URL 等任務內容
  * @param projectItemId GitHub Projects v2 item node ID；Telegram 任務允許為 null
+ * @param telegramChatId Telegram chat ID；非 Telegram 來源任務允許為 null
  * @param createdAt    Gateway 建立任務的 UTC 時間
  */
 public record DevTask(
@@ -19,6 +20,7 @@ public record DevTask(
         TargetEngine targetEngine,
         String payload,
         String projectItemId,
+        String telegramChatId,
         Instant createdAt
 ) {
 
@@ -26,7 +28,7 @@ public record DevTask(
      * 建立新任務，統一由 Gateway 產生 UUID 與時間戳。
      */
     public static DevTask create(TaskSource source, TargetEngine targetEngine, String payload) {
-        return create(source, targetEngine, payload, null);
+        return create(source, targetEngine, payload, null, null);
     }
 
     /**
@@ -36,6 +38,19 @@ public record DevTask(
      * 對應看板卡片，因此可繼續使用不帶 {@code projectItemId} 的 {@link #create(TaskSource, TargetEngine, String)}。</p>
      */
     public static DevTask create(TaskSource source, TargetEngine targetEngine, String payload, String projectItemId) {
-        return new DevTask(UUID.randomUUID(), source, targetEngine, payload, projectItemId, Instant.now());
+        return create(source, targetEngine, payload, projectItemId, null);
+    }
+
+    /**
+     * 建立帶有 Telegram chat ID 的任務，讓 Orchestrator 完成後可以回報終點狀態。
+     */
+    public static DevTask create(
+            TaskSource source,
+            TargetEngine targetEngine,
+            String payload,
+            String projectItemId,
+            String telegramChatId
+    ) {
+        return new DevTask(UUID.randomUUID(), source, targetEngine, payload, projectItemId, telegramChatId, Instant.now());
     }
 }

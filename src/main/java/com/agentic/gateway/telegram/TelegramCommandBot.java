@@ -83,7 +83,13 @@ public class TelegramCommandBot extends TelegramLongPollingBot {
             return;
         }
 
-        DevTask task = DevTask.create(TaskSource.TELEGRAM, parsedCommand.targetEngine(), parsedCommand.payload());
+        DevTask task = DevTask.create(
+                TaskSource.TELEGRAM,
+                parsedCommand.targetEngine(),
+                parsedCommand.payload(),
+                null,
+                message.getChatId().toString()
+        );
         log.info("Scheduling Telegram DevTask. taskId={}, targetEngine={}",
                 task.taskId(), task.targetEngine());
         devTaskPublisher.publishAsync(task)

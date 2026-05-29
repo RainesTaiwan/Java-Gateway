@@ -35,4 +35,39 @@ class DevTaskTest {
 
         assertThat(task.projectItemId()).isNull();
     }
+
+    @Test
+    void telegramTaskCanCarryChatIdForCompletionNotification() throws Exception {
+        DevTask task = DevTask.create(
+                TaskSource.TELEGRAM,
+                TargetEngine.DEFAULT,
+                "幫我改 Code",
+                null,
+                "1377489086"
+        );
+
+        String json = objectMapper.writeValueAsString(task);
+        DevTask deserialized = objectMapper.readValue(json, DevTask.class);
+
+        assertThat(json).contains("\"telegramChatId\":\"1377489086\"");
+        assertThat(deserialized.telegramChatId()).isEqualTo("1377489086");
+    }
+
+    @Test
+    void deserializeLegacyTaskWithoutTelegramChatId() throws Exception {
+        String json = """
+                {
+                  "taskId": "63250562-4030-42d0-a1db-b087599afd94",
+                  "source": "TELEGRAM",
+                  "targetEngine": "DEFAULT",
+                  "payload": "legacy task",
+                  "projectItemId": null,
+                  "createdAt": "2026-05-29T17:50:00Z"
+                }
+                """;
+
+        DevTask deserialized = objectMapper.readValue(json, DevTask.class);
+
+        assertThat(deserialized.telegramChatId()).isNull();
+    }
 }

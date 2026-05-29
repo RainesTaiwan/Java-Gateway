@@ -19,6 +19,7 @@ import com.github.dockerjava.core.command.WaitContainerResultCallback;
 import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
 import com.github.dockerjava.transport.DockerHttpClient;
 import java.io.Closeable;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
@@ -166,7 +167,9 @@ public class DockerAgentRunner implements Closeable {
                     .exec(new LogContainerResultCallback() {
                         @Override
                         public void onNext(Frame item) {
-                            logs.append(item.toString());
+                            if (item != null && item.getPayload() != null) {
+                                logs.append(new String(item.getPayload(), StandardCharsets.UTF_8));
+                            }
                         }
                     })
                     .awaitCompletion(30, TimeUnit.SECONDS);
