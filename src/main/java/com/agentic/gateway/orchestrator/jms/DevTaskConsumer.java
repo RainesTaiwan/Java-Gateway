@@ -2,6 +2,7 @@ package com.agentic.gateway.orchestrator.jms;
 
 import com.agentic.gateway.dto.DevTask;
 import com.agentic.gateway.orchestrator.WorkflowOrchestrator;
+import com.agentic.gateway.orchestrator.persistence.DevTaskRecordService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
@@ -13,9 +14,9 @@ import org.springframework.stereotype.Component;
 /**
  * ActiveMQ 任務消費端。
  *
- * <p>收到訊息並反序列化成功後立即手動 acknowledge，避免長時間 Agent 執行阻塞 JMS listener
- * 執行緒而觸發 ActiveMQ redelivery。實際編排改由
- * {@link WorkflowOrchestrator#processTaskAsync(DevTask)} 在獨立執行緒池處理。</p>
+ * <p>採用「先落表、再簽收、後非同步執行」模式：資料庫寫入成功後才 acknowledge，
+ * 避免 JVM 崩潰時因過早 ACK 造成任務靜默遺失。編排由
+ * {@link WorkflowOrchestrator#processTaskAsync(String)} 在獨立執行緒池處理。</p>
  */
 @Slf4j
 @Component
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Component;
 public class DevTaskConsumer {
 
     private final ObjectMapper objectMapper;
+    private final DevTaskRecordService devTaskRecordService;
     private final WorkflowOrchestrator workflowOrchestrator;
 
     @JmsListener(destination = "${app.jms.command-queue}")
@@ -31,10 +33,19 @@ public class DevTaskConsumer {
 
         try {
             DevTask task = objectMapper.readValue(rawPayload, DevTask.class);
-            message.acknowledge();
-            log.info("DevTask message acknowledged before async dispatch. taskId={}, messageId={}",
+
+            // Step A: 落表
+            devTaskRecordService.persistReceived(task);
+            log.info("DevTask persisted before acknowledge. taskId={}, messageId={}",
                     task.taskId(), message.getJMSMessageID());
-            workflowOrchestrator.processTaskAsync(task);
+
+            // Step B: 簽收
+            message.acknowledge();
+            log.info("DevTask message acknowledged after persistence. taskId={}, messageId={}",
+                    task.taskId(), message.getJMSMessageID());
+
+            // Step C: 非同步調度
+            workflowOrchestrator.processTaskAsync(task.taskId().toString());
         } catch (Exception ex) {
             log.error("Failed to consume DevTask message. messageId={}", message.getJMSMessageID(), ex);
             if (ex instanceof JMSException jmsException) {

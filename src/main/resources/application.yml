@@ -2,6 +2,24 @@ spring:
   application:
     name: java-gateway
 
+  datasource:
+    url: jdbc:h2:file:./data/agent_db
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+  h2:
+    console:
+      enabled: false
+
   activemq:
     # ActiveMQ broker 連線位置；Docker Compose 內會由 ACTIVEMQ_BROKER_URL 覆蓋為 tcp://activemq:61616。
     broker-url: ${ACTIVEMQ_BROKER_URL:tcp://localhost:61616}
@@ -12,7 +30,7 @@ spring:
   jms:
     pub-sub-domain: false
     listener:
-      # Orchestrator 消費端採 CLIENT_ACKNOWLEDGE；反序列化成功後立即手動 acknowledge，長任務改由非同步執行緒池處理。
+      # Orchestrator 消費端採 CLIENT_ACKNOWLEDGE；先落表至 H2 成功後才手動 acknowledge，長任務改由非同步執行緒池處理。
       acknowledge-mode: client
 
 # 啟用 telegrambots-spring-boot-starter 的 Long Polling 自動註冊。

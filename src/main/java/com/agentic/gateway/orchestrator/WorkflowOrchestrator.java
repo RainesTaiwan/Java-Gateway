@@ -9,6 +9,7 @@ import com.agentic.gateway.orchestrator.git.GitSyncService;
 import com.agentic.gateway.orchestrator.github.GitHubProjectSyncService;
 import com.agentic.gateway.orchestrator.ollama.OllamaNoiseReducer;
 import com.agentic.gateway.orchestrator.ollama.TaskSplitterService;
+import com.agentic.gateway.orchestrator.persistence.DevTaskRecordService;
 import com.agentic.gateway.orchestrator.telegram.TelegramNotifierService;
 import com.agentic.gateway.orchestrator.test.TestExecutionResult;
 import com.agentic.gateway.orchestrator.test.TestRunnerService;
@@ -24,7 +25,7 @@ import java.util.Optional;
  *
  * <p>狀態流轉：RECEIVED → PLANNING → IN_PROGRESS → RUNNING → VERIFYING → SUCCESS，
  * 失敗時進入 RETRYING 並走 Karpathy Loop。VERIFYING 階段由 {@link TestRunnerService}
- * 在獨立 Maven 容器內執行測試，通過後才允許 commit/push。</p>
+ * 在獨立 Maven 容器內執行測試，通過後才允許 commit/push。每次狀態切換皆持久化至資料庫。</p>
  */
 @Slf4j
 @Service
@@ -45,19 +46,22 @@ public class WorkflowOrchestrator {
     private final TaskSplitterService taskSplitterService;
     private final TelegramNotifierService telegramNotifierService;
     private final TestRunnerService testRunnerService;
+    private final DevTaskRecordService devTaskRecordService;
 
     /**
      * 非同步派發開發任務，與 JMS listener 執行緒分離。
      */
     @Async("orchestratorTaskExecutor")
-    public void processTaskAsync(DevTask task) {
-        processTask(task);
+    public void processTaskAsync(String taskId) {
+        processTask(taskId);
     }
 
     /**
-     * 處理單一開發任務。
+     * 依 taskId 從資料庫載入任務並處理；所有狀態切換同步寫入資料庫。
      */
-    public void processTask(DevTask task) {
+    public void processTask(String taskId) {
+        DevTask task = devTaskRecordService.loadDevTask(taskId);
+
         log.info("Orchestrator received DevTask. taskId={}, source={}, targetEngine={}",
                 task.taskId(), task.source(), task.targetEngine());
         log.info("DevTask payload preview. taskId={}, payload={}", task.taskId(), truncateLog(task.payload()));
@@ -68,12 +72,12 @@ public class WorkflowOrchestrator {
             log.info("[INFO] Task source is Telegram, skipping GitHub project card sync.");
         }
 
-        transition(task, projectItemId, TaskState.RECEIVED);
-        transition(task, projectItemId, TaskState.PLANNING);
+        transition(taskId, task, projectItemId, TaskState.RECEIVED);
+        transition(taskId, task, projectItemId, TaskState.PLANNING);
         String plannedSpec = taskSplitterService.splitTask(task.payload());
         log.info("Task split plan generated. taskId={}, plan=\n{}", task.taskId(), truncateLog(plannedSpec));
 
-        transition(task, projectItemId, TaskState.IN_PROGRESS);
+        transition(taskId, task, projectItemId, TaskState.IN_PROGRESS);
 
         // 第一次嘗試前重置為遠端乾淨基線；後續 retry 保留髒工作區讓開發引擎接續修正。
         gitSyncService.syncRepository();
@@ -85,7 +89,7 @@ public class WorkflowOrchestrator {
 
         while (true) {
             int attemptNumber = retryCount + 1;
-            transition(task, projectItemId, TaskState.RUNNING);
+            transition(taskId, task, projectItemId, TaskState.RUNNING);
             log.info("Starting agent attempt. taskId={}, targetEngine={}, engine={}, attempt={}, maxRetries={}",
                     task.taskId(), task.targetEngine(), agentExecutionService.engineName(), attemptNumber, MAX_RETRIES);
 
@@ -93,14 +97,15 @@ public class WorkflowOrchestrator {
 
             if (!sandboxResult.isSuccess()) {
                 if (retryCount >= MAX_RETRIES) {
-                    transition(task, projectItemId, TaskState.FAILED);
+                    transition(taskId, task, projectItemId, TaskState.FAILED);
                     log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastExitCode={}, timedOut={}",
                             task.taskId(), attemptNumber, sandboxResult.exitCode(), sandboxResult.timedOut());
                     return;
                 }
 
                 retryCount++;
-                transition(task, projectItemId, TaskState.RETRYING);
+                devTaskRecordService.updateRetryCount(taskId, retryCount);
+                transition(taskId, task, projectItemId, TaskState.RETRYING);
 
                 String noiseReducedLog = ollamaNoiseReducer.reduceNoise(sandboxResult.logs());
                 currentAttempt = taskWithRetryContext(currentAttempt, noiseReducedLog);
@@ -115,11 +120,11 @@ public class WorkflowOrchestrator {
                 String outputSummary = truncateLog(sandboxResult.logs());
                 log.warn("[交付失敗] taskId={}, 沙盒回傳成功但工作區無任何代碼變更 (git diff 為空)！AI 輸出摘要:\n{}",
                         task.taskId(), outputSummary);
-                transition(task, projectItemId, TaskState.FAILED);
+                transition(taskId, task, projectItemId, TaskState.FAILED);
                 return;
             }
 
-            transition(task, projectItemId, TaskState.VERIFYING);
+            transition(taskId, task, projectItemId, TaskState.VERIFYING);
             log.info("[測試驗證] taskId={} Agent 已產生變更，啟動獨立 TestRunner 容器執行 mvn test。", task.taskId());
 
             TestExecutionResult testResult = testRunnerService.runTests(task);
@@ -132,11 +137,11 @@ public class WorkflowOrchestrator {
                     gitSyncService.commitAndPush(task.taskId().toString());
                 } catch (Exception ex) {
                     log.error("[交付失敗] taskId={} 測試已通過，但 commit/push 失敗。", task.taskId(), ex);
-                    transition(task, projectItemId, TaskState.FAILED);
+                    transition(taskId, task, projectItemId, TaskState.FAILED);
                     return;
                 }
 
-                transition(task, projectItemId, TaskState.SUCCESS);
+                transition(taskId, task, projectItemId, TaskState.SUCCESS);
                 log.info("Orchestrator finished DevTask successfully. taskId={}, attempt={}, agentExitCode={}, testExitCode={}",
                         task.taskId(), attemptNumber, sandboxResult.exitCode(), testResult.exitCode());
                 return;
@@ -146,14 +151,15 @@ public class WorkflowOrchestrator {
                     task.taskId(), testResult.exitCode(), testResult.timedOut(), truncateLog(testResult.logs()));
 
             if (retryCount >= MAX_RETRIES) {
-                transition(task, projectItemId, TaskState.FAILED);
+                transition(taskId, task, projectItemId, TaskState.FAILED);
                 log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastTestExitCode={}, timedOut={}",
                         task.taskId(), attemptNumber, testResult.exitCode(), testResult.timedOut());
                 return;
             }
 
             retryCount++;
-            transition(task, projectItemId, TaskState.RETRYING);
+            devTaskRecordService.updateRetryCount(taskId, retryCount);
+            transition(taskId, task, projectItemId, TaskState.RETRYING);
 
             String noiseReducedLog = ollamaNoiseReducer.reduceNoise(testResult.logs());
             currentAttempt = taskWithRetryContext(currentAttempt, noiseReducedLog);
@@ -162,7 +168,8 @@ public class WorkflowOrchestrator {
         }
     }
 
-    private void transition(DevTask task, Optional<String> projectItemId, TaskState nextState) {
+    private void transition(String taskId, DevTask task, Optional<String> projectItemId, TaskState nextState) {
+        devTaskRecordService.updateState(taskId, nextState);
         log.info("Task state changed. taskId={}, state={}", task.taskId(), nextState);
         projectItemId.ifPresent(itemId -> gitHubProjectSyncService.updateCardStatus(itemId, nextState));
 
