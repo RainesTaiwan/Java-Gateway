@@ -2,6 +2,7 @@ package com.agentic.gateway.orchestrator.agent;
 
 import com.agentic.gateway.dto.TargetEngine;
 import com.agentic.gateway.orchestrator.agent.aider.ClaudeAiderExecutionService;
+import com.agentic.gateway.orchestrator.agent.cursor.CursorAgentExecutionService;
 import com.agentic.gateway.orchestrator.agent.ollama.LocalOllamaExecutionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -14,12 +15,14 @@ import org.springframework.stereotype.Component;
 public class AgentExecutionRegistry {
 
     private final ClaudeAiderExecutionService claudeAiderExecutionService;
+    private final CursorAgentExecutionService cursorAgentExecutionService;
     private final LocalOllamaExecutionService localOllamaExecutionService;
 
     public AgentExecutionService resolve(TargetEngine targetEngine) {
         return switch (targetEngine) {
-            case CLAUDE, DEFAULT -> claudeAiderExecutionService;
+            case CLAUDE -> claudeAiderExecutionService;
             case LOCAL -> localOllamaExecutionService;
+            case DEFAULT, CURSOR -> cursorAgentExecutionService;
         };
     }
 }

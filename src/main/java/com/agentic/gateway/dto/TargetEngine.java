@@ -5,6 +5,7 @@ package com.agentic.gateway.dto;
  */
 public enum TargetEngine {
     CLAUDE,
+    CURSOR,
     LOCAL,
     DEFAULT
 }

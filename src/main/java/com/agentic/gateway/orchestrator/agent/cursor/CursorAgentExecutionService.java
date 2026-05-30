@@ -11,13 +11,15 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
 
 /**
  * 使用自建 Cursor SDK runner 映像在 workspace 內執行開發任務。
  *
- * <p>保留供未來擴充；目前 Orchestrator 改由 {@link com.agentic.gateway.orchestrator.agent.AgentExecutionRegistry}
- * 依 {@link com.agentic.gateway.dto.TargetEngine} 路由，預設走 Claude Aider 路徑。</p>
+ * <p>由 {@link com.agentic.gateway.orchestrator.agent.AgentExecutionRegistry}
+ * 依 {@link com.agentic.gateway.dto.TargetEngine} 路由；{@code DEFAULT} 與 {@code CURSOR} 皆走此引擎。</p>
  */
+@Service
 @RequiredArgsConstructor
 public class CursorAgentExecutionService implements AgentExecutionService {
 

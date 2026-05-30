@@ -2,6 +2,7 @@ package com.agentic.gateway.orchestrator.agent;
 
 import com.agentic.gateway.dto.TargetEngine;
 import com.agentic.gateway.orchestrator.agent.aider.ClaudeAiderExecutionService;
+import com.agentic.gateway.orchestrator.agent.cursor.CursorAgentExecutionService;
 import com.agentic.gateway.orchestrator.agent.ollama.LocalOllamaExecutionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,19 +19,31 @@ class AgentExecutionRegistryTest {
     private ClaudeAiderExecutionService claudeAiderExecutionService;
 
     @Mock
+    private CursorAgentExecutionService cursorAgentExecutionService;
+
+    @Mock
     private LocalOllamaExecutionService localOllamaExecutionService;
 
     private AgentExecutionRegistry registry;
 
     @BeforeEach
     void setUp() {
-        registry = new AgentExecutionRegistry(claudeAiderExecutionService, localOllamaExecutionService);
+        registry = new AgentExecutionRegistry(
+                claudeAiderExecutionService,
+                cursorAgentExecutionService,
+                localOllamaExecutionService
+        );
     }
 
     @Test
-    void resolveClaudeAndDefaultToClaudeAider() {
+    void resolveClaudeToClaudeAider() {
         assertThat(registry.resolve(TargetEngine.CLAUDE)).isSameAs(claudeAiderExecutionService);
-        assertThat(registry.resolve(TargetEngine.DEFAULT)).isSameAs(claudeAiderExecutionService);
+    }
+
+    @Test
+    void resolveDefaultAndCursorToCursorAgent() {
+        assertThat(registry.resolve(TargetEngine.DEFAULT)).isSameAs(cursorAgentExecutionService);
+        assertThat(registry.resolve(TargetEngine.CURSOR)).isSameAs(cursorAgentExecutionService);
     }
 
     @Test

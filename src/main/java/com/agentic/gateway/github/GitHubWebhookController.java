@@ -40,13 +40,21 @@ public class GitHubWebhookController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        payloadExtractor.extract(rawPayload)
-                .ifPresentOrElse(
-                        this::publishGitHubTask,
-                        () -> log.info("GitHub webhook verified but no supported task payload was found. event={}", eventName)
-                );
+        GitHubPayloadExtractor.ExtractionResult extractionResult = payloadExtractor.extract(rawPayload);
+        extractionResult.payload().ifPresentOrElse(
+                this::publishGitHubTask,
+                () -> {
+                    if (extractionResult.nonActionableAction()) {
+                        return;
+                    }
+                    log.info("GitHub webhook verified but no supported task payload was found. event={}", eventName);
+                }
+        );
 
-        return ResponseEntity.accepted().build();
+        if (extractionResult.payload().isPresent()) {
+            return ResponseEntity.accepted().build();
+        }
+        return ResponseEntity.ok().build();
     }
 
     private void publishGitHubTask(GitHubTaskPayload payload) {

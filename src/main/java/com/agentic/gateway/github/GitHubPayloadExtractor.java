@@ -20,18 +20,84 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class GitHubPayloadExtractor {
 
+    private static final String TODO_COLUMN_NAME = "Todo";
+
     private final ObjectMapper objectMapper;
 
-    public Optional<GitHubTaskPayload> extract(String rawPayload) {
+    public ExtractionResult extract(String rawPayload) {
         try {
             JsonNode root = objectMapper.readTree(rawPayload);
-            return extractProjectsV2Issue(root)
+            if (!isActionableEvent(root)) {
+                log.info("Webhook ignored: Action not actionable.");
+                return ExtractionResult.nonActionable();
+            }
+
+            Optional<GitHubTaskPayload> payload = extractProjectsV2Issue(root)
                     .or(() -> extractIssue(root))
                     .or(() -> extractClassicProjectCard(root));
+            return payload.map(ExtractionResult::found).orElseGet(ExtractionResult::notFound);
         } catch (Exception ex) {
             log.warn("Ignored malformed GitHub webhook payload.", ex);
-            return Optional.empty();
+            return ExtractionResult.notFound();
         }
+    }
+
+    private boolean isActionableEvent(JsonNode root) {
+        if (!root.path("projects_v2_item").isMissingNode() && !root.path("projects_v2_item").isNull()) {
+            return isProjectsV2Actionable(root);
+        }
+        if (!root.path("issue").isMissingNode() && !root.path("issue").isNull()) {
+            return isIssueActionable(root.path("action").asText(""));
+        }
+        if (!root.path("project_card").isMissingNode() && !root.path("project_card").isNull()) {
+            return isClassicProjectCardActionable(root.path("action").asText(""));
+        }
+        return false;
+    }
+
+    private boolean isIssueActionable(String action) {
+        return switch (action) {
+            case "opened", "labeled", "unlabeled" -> true;
+            default -> false;
+        };
+    }
+
+    private boolean isProjectsV2Actionable(JsonNode root) {
+        String action = root.path("action").asText("");
+        return switch (action) {
+            case "created" -> true;
+            case "edited" -> isMovedToTodoColumn(root);
+            default -> false;
+        };
+    }
+
+    private boolean isClassicProjectCardActionable(String action) {
+        return switch (action) {
+            case "created", "moved" -> true;
+            default -> false;
+        };
+    }
+
+    private boolean isMovedToTodoColumn(JsonNode root) {
+        JsonNode toNode = root.path("changes").path("field_value").path("to");
+        if (toNode.isMissingNode() || toNode.isNull()) {
+            return false;
+        }
+
+        if (isTodoColumnName(toNode.path("name").asText(""))) {
+            return true;
+        }
+
+        JsonNode singleSelectOption = toNode.path("single_select_option");
+        if (!singleSelectOption.isMissingNode() && !singleSelectOption.isNull()) {
+            return isTodoColumnName(singleSelectOption.path("name").asText(""));
+        }
+
+        return false;
+    }
+
+    private boolean isTodoColumnName(String name) {
+        return TODO_COLUMN_NAME.equalsIgnoreCase(name.trim());
     }
 
     private Optional<GitHubTaskPayload> extractIssue(JsonNode root) {
@@ -144,5 +210,20 @@ public class GitHubPayloadExtractor {
 
     private String firstNonBlank(String first, String second) {
         return first == null || first.isBlank() ? second : first;
+    }
+
+    public record ExtractionResult(Optional<GitHubTaskPayload> payload, boolean nonActionableAction) {
+
+        public static ExtractionResult found(GitHubTaskPayload payload) {
+            return new ExtractionResult(Optional.of(payload), false);
+        }
+
+        public static ExtractionResult nonActionable() {
+            return new ExtractionResult(Optional.empty(), true);
+        }
+
+        public static ExtractionResult notFound() {
+            return new ExtractionResult(Optional.empty(), false);
+        }
     }
 }
