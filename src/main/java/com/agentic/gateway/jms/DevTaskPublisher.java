@@ -1,6 +1,6 @@
 package com.agentic.gateway.jms;
 
-import com.agentic.gateway.config.GatewayProperties;
+import com.agentic.gateway.config.AppProperties;
 import com.agentic.gateway.dto.DevTask;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,13 +25,13 @@ public class DevTaskPublisher {
 
     private final JmsTemplate jmsTemplate;
     private final ObjectMapper objectMapper;
-    private final GatewayProperties gatewayProperties;
+    private final AppProperties appProperties;
 
     @Async("gatewayTaskExecutor")
     public CompletableFuture<Void> publishAsync(DevTask task) {
         try {
             String jsonPayload = objectMapper.writeValueAsString(task);
-            jmsTemplate.convertAndSend(gatewayProperties.jms().commandQueue(), jsonPayload);
+            jmsTemplate.convertAndSend(appProperties.jms().commandQueue(), jsonPayload);
             log.info("DevTask published to queue. taskId={}, source={}, targetEngine={}",
                     task.taskId(), task.source(), task.targetEngine());
             return CompletableFuture.completedFuture(null);

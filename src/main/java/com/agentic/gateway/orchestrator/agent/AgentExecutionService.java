@@ -5,8 +5,8 @@ import com.agentic.gateway.dto.DevTask;
 /**
  * 開發引擎執行抽象介面。
  *
- * <p>Orchestrator 透過此介面呼叫 Cursor 或 Aider，而不直接耦合任一實作。
- * 切換引擎時只需調整設定與 Spring Bean 選擇，狀態機與 Karpathy Loop 無需改動。</p>
+ * <p>Orchestrator 透過 {@link AgentExecutionRegistry} 依 {@code task.targetEngine()}
+ * 動態選擇實作，狀態機與 Karpathy Loop 無需改動。</p>
  */
 public interface AgentExecutionService {
 

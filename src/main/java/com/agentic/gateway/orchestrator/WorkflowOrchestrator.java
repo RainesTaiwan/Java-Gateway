@@ -2,6 +2,7 @@ package com.agentic.gateway.orchestrator;
 
 import com.agentic.gateway.config.OrchestratorProperties;
 import com.agentic.gateway.dto.DevTask;
+import com.agentic.gateway.orchestrator.agent.AgentExecutionRegistry;
 import com.agentic.gateway.orchestrator.agent.AgentExecutionResult;
 import com.agentic.gateway.orchestrator.agent.AgentExecutionService;
 import com.agentic.gateway.orchestrator.git.GitSyncService;
@@ -13,6 +14,7 @@ import com.agentic.gateway.orchestrator.test.TestExecutionResult;
 import com.agentic.gateway.orchestrator.test.TestRunnerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
@@ -38,18 +40,22 @@ public class WorkflowOrchestrator {
     private final OrchestratorProperties orchestratorProperties;
     private final GitHubProjectSyncService gitHubProjectSyncService;
     private final GitSyncService gitSyncService;
-    private final AgentExecutionService agentExecutionService;
+    private final AgentExecutionRegistry agentExecutionRegistry;
     private final OllamaNoiseReducer ollamaNoiseReducer;
     private final TaskSplitterService taskSplitterService;
     private final TelegramNotifierService telegramNotifierService;
     private final TestRunnerService testRunnerService;
 
     /**
+     * 非同步派發開發任務，與 JMS listener 執行緒分離。
+     */
+    @Async("orchestratorTaskExecutor")
+    public void processTaskAsync(DevTask task) {
+        processTask(task);
+    }
+
+    /**
      * 處理單一開發任務。
-     *
-     * <p>此方法目前是同步方法，讓 JMS consumer 可以清楚判斷「已成功進入 Orchestrator
-     * 控管」後再 acknowledge。未來若改為長時間非同步 workflow，建議先將任務持久化到
-     * Orchestrator 自己的狀態儲存，再 ack JMS 訊息。</p>
      */
     public void processTask(DevTask task) {
         log.info("Orchestrator received DevTask. taskId={}, source={}, targetEngine={}",
@@ -75,11 +81,13 @@ public class WorkflowOrchestrator {
         DevTask currentAttempt = taskWithPlannedSpec(task, plannedSpec);
         int retryCount = 0;
 
+        AgentExecutionService agentExecutionService = agentExecutionRegistry.resolve(task.targetEngine());
+
         while (true) {
             int attemptNumber = retryCount + 1;
             transition(task, projectItemId, TaskState.RUNNING);
-            log.info("Starting agent attempt. taskId={}, engine={}, attempt={}, maxRetries={}",
-                    task.taskId(), agentExecutionService.engineName(), attemptNumber, MAX_RETRIES);
+            log.info("Starting agent attempt. taskId={}, targetEngine={}, engine={}, attempt={}, maxRetries={}",
+                    task.taskId(), task.targetEngine(), agentExecutionService.engineName(), attemptNumber, MAX_RETRIES);
 
             AgentExecutionResult sandboxResult = agentExecutionService.runAgent(currentAttempt);
 

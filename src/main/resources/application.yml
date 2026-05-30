@@ -12,7 +12,7 @@ spring:
   jms:
     pub-sub-domain: false
     listener:
-      # Orchestrator 消費端採 CLIENT_ACKNOWLEDGE；只有任務成功交給狀態機後才手動 acknowledge。
+      # Orchestrator 消費端採 CLIENT_ACKNOWLEDGE；反序列化成功後立即手動 acknowledge，長任務改由非同步執行緒池處理。
       acknowledge-mode: client
 
 # 啟用 telegrambots-spring-boot-starter 的 Long Polling 自動註冊。
@@ -50,9 +50,9 @@ github:
       graphql-url: ${GITHUB_GRAPHQL_URL:https://api.github.com/graphql}
       timeout-seconds: ${GITHUB_GRAPHQL_TIMEOUT_SECONDS:10}
 
-gateway:
+app:
   jms:
-    # 下游 Agentic Engineering Orchestrator 監聽的指令佇列。
+    # Gateway 發佈與 Orchestrator 消費端共用的指令佇列名稱。
     command-queue: ${DEV_COMMAND_QUEUE:dev.command.queue}
 
 orchestrator:

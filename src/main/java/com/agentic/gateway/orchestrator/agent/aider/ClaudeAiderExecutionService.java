@@ -9,18 +9,16 @@ import com.agentic.gateway.orchestrator.agent.DockerAgentRunner;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 /**
- * 使用 Aider Docker 映像執行開發任務（Anthropic / 其他 LLM provider）。
+ * 使用 Aider Docker 映像執行 Claude / 預設開發任務。
  */
 @Service
 @RequiredArgsConstructor
-@ConditionalOnProperty(name = "orchestrator.agent.engine", havingValue = "aider")
-public class AiderAgentExecutionService implements AgentExecutionService {
+public class ClaudeAiderExecutionService implements AgentExecutionService {
 
-    private static final String ENGINE = "aider";
+    private static final String ENGINE = "claude-aider";
     private static final String WORKDIR = "/app";
 
     private final OrchestratorProperties orchestratorProperties;
