@@ -9,6 +9,8 @@ import com.agentic.gateway.orchestrator.github.GitHubProjectSyncService;
 import com.agentic.gateway.orchestrator.ollama.OllamaNoiseReducer;
 import com.agentic.gateway.orchestrator.ollama.TaskSplitterService;
 import com.agentic.gateway.orchestrator.telegram.TelegramCompletionNotifier;
+import com.agentic.gateway.orchestrator.test.TestExecutionResult;
+import com.agentic.gateway.orchestrator.test.TestRunnerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,11 +20,9 @@ import java.util.Optional;
 /**
  * Java Orchestrator 核心編排器。
  *
- * <p>目前版本只建立最小狀態機骨架：接到 {@link DevTask} 後依序模擬
- * RECEIVED -> IN_PROGRESS -> RUNNING -> VERIFYING -> SUCCESS 的狀態流轉，
- * 並在每次狀態切換時嘗試同步 GitHub Projects v2 看板狀態。後續要接入 JGit、
- * Aider Docker 沙盒、TestRunner 與 Karpathy Loop 時，應把實際動作掛在這個服務內，
- * 而不是放回 Gateway ingress 層。</p>
+ * <p>狀態流轉：RECEIVED → PLANNING → IN_PROGRESS → RUNNING → VERIFYING → SUCCESS，
+ * 失敗時進入 RETRYING 並走 Karpathy Loop。VERIFYING 階段由 {@link TestRunnerService}
+ * 在獨立 Maven 容器內執行測試，通過後才允許 commit/push。</p>
  */
 @Slf4j
 @Service
@@ -40,6 +40,7 @@ public class WorkflowOrchestrator {
     private final OllamaNoiseReducer ollamaNoiseReducer;
     private final TaskSplitterService taskSplitterService;
     private final TelegramCompletionNotifier telegramCompletionNotifier;
+    private final TestRunnerService testRunnerService;
 
     /**
      * 處理單一開發任務。
@@ -79,52 +80,82 @@ public class WorkflowOrchestrator {
                     task.taskId(), agentExecutionService.engineName(), attemptNumber, MAX_RETRIES);
 
             AgentExecutionResult sandboxResult = agentExecutionService.runAgent(currentAttempt);
-            transition(task, projectItemId, TaskState.VERIFYING);
 
-            if (sandboxResult.isSuccess()) {
-                boolean hasDiff = gitSyncService.hasChanges(orchestratorProperties.workspace().containerPath());
-                if (!hasDiff) {
-                    String outputSummary = truncateLog(sandboxResult.logs());
-                    log.warn("[交付失敗] taskId={}, 沙盒回傳成功但工作區無任何代碼變更 (git diff 為空)！AI 輸出摘要:\n{}",
-                            task.taskId(), outputSummary);
+            if (!sandboxResult.isSuccess()) {
+                if (retryCount >= MAX_RETRIES) {
                     transition(task, projectItemId, TaskState.FAILED);
+                    log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastExitCode={}, timedOut={}",
+                            task.taskId(), attemptNumber, sandboxResult.exitCode(), sandboxResult.timedOut());
                     sendTelegramReport(
                             task.telegramChatId(),
-                            "任務執行結束，但 Agent 未偵測到任何實質程式碼修改，交付中止。\n\nAgent 輸出摘要:\n"
-                                    + outputSummary
+                            "任務執行失敗，Agent 已達最大重試次數。請查看 Orchestrator log 取得詳細原因。"
                     );
                     return;
                 }
 
-                log.info("[交付核實] taskId={} 成功。AI 輸出摘要:\n{}",
+                retryCount++;
+                transition(task, projectItemId, TaskState.RETRYING);
+
+                String noiseReducedLog = ollamaNoiseReducer.reduceNoise(sandboxResult.logs());
+                currentAttempt = taskWithRetryContext(currentAttempt, noiseReducedLog);
+                log.warn("Agent attempt failed; retry scheduled. taskId={}, engine={}, nextAttempt={}, exitCode={}, timedOut={}, summary={}",
+                        task.taskId(), sandboxResult.engine(), retryCount + 1, sandboxResult.exitCode(),
+                        sandboxResult.timedOut(), noiseReducedLog);
+                continue;
+            }
+
+            boolean hasDiff = gitSyncService.hasChanges(orchestratorProperties.workspace().containerPath());
+            if (!hasDiff) {
+                String outputSummary = truncateLog(sandboxResult.logs());
+                log.warn("[交付失敗] taskId={}, 沙盒回傳成功但工作區無任何代碼變更 (git diff 為空)！AI 輸出摘要:\n{}",
+                        task.taskId(), outputSummary);
+                transition(task, projectItemId, TaskState.FAILED);
+                sendTelegramReport(
+                        task.telegramChatId(),
+                        "任務執行結束，但 Agent 未偵測到任何實質程式碼修改，交付中止。\n\nAgent 輸出摘要:\n"
+                                + outputSummary
+                );
+                return;
+            }
+
+            transition(task, projectItemId, TaskState.VERIFYING);
+            log.info("[測試驗證] taskId={} Agent 已產生變更，啟動獨立 TestRunner 容器執行 mvn test。", task.taskId());
+
+            TestExecutionResult testResult = testRunnerService.runTests(task);
+
+            if (testResult.isSuccess()) {
+                log.info("[交付核實] taskId={} 測試通過。Agent 輸出摘要:\n{}",
                         task.taskId(), truncateLog(sandboxResult.logs()));
 
                 try {
                     gitSyncService.commitAndPush(task.taskId().toString());
                 } catch (Exception ex) {
-                    log.error("[交付失敗] taskId={} 代碼已有變更，但 commit/push 失敗。", task.taskId(), ex);
+                    log.error("[交付失敗] taskId={} 測試已通過，但 commit/push 失敗。", task.taskId(), ex);
                     transition(task, projectItemId, TaskState.FAILED);
                     sendTelegramReport(
                             task.telegramChatId(),
-                            "任務已產生程式碼修改，但自動 commit/push 失敗，交付中止。"
+                            "任務已通過測試，但自動 commit/push 失敗，交付中止。"
                     );
                     return;
                 }
 
                 transition(task, projectItemId, TaskState.SUCCESS);
-                log.info("Orchestrator finished DevTask successfully. taskId={}, attempt={}, exitCode={}",
-                        task.taskId(), attemptNumber, sandboxResult.exitCode());
-                sendTelegramReport(task.telegramChatId(), "任務交付成功！代碼已自動推送到遠端倉庫。");
+                log.info("Orchestrator finished DevTask successfully. taskId={}, attempt={}, agentExitCode={}, testExitCode={}",
+                        task.taskId(), attemptNumber, sandboxResult.exitCode(), testResult.exitCode());
+                sendTelegramReport(task.telegramChatId(), "任務交付成功！代碼已通過測試並自動推送到遠端倉庫。");
                 return;
             }
 
+            log.warn("[測試失敗] taskId={}, testExitCode={}, timedOut={}, mavenLogSummary=\n{}",
+                    task.taskId(), testResult.exitCode(), testResult.timedOut(), truncateLog(testResult.logs()));
+
             if (retryCount >= MAX_RETRIES) {
                 transition(task, projectItemId, TaskState.FAILED);
-                log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastExitCode={}, timedOut={}",
-                        task.taskId(), attemptNumber, sandboxResult.exitCode(), sandboxResult.timedOut());
+                log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastTestExitCode={}, timedOut={}",
+                        task.taskId(), attemptNumber, testResult.exitCode(), testResult.timedOut());
                 sendTelegramReport(
                         task.telegramChatId(),
-                        "任務執行失敗，Agent 已達最大重試次數。請查看 Orchestrator log 取得詳細原因。"
+                        "任務執行失敗，測試已達最大重試次數。請查看 Orchestrator log 取得 Maven 錯誤詳情。"
                 );
                 return;
             }
@@ -132,10 +163,10 @@ public class WorkflowOrchestrator {
             retryCount++;
             transition(task, projectItemId, TaskState.RETRYING);
 
-            String noiseReducedLog = ollamaNoiseReducer.reduceNoise(sandboxResult.logs());
+            String noiseReducedLog = ollamaNoiseReducer.reduceNoise(testResult.logs());
             currentAttempt = taskWithRetryContext(currentAttempt, noiseReducedLog);
-            log.warn("Agent attempt failed; retry scheduled. taskId={}, engine={}, nextAttempt={}, exitCode={}, timedOut={}, summary={}",
-                    task.taskId(), sandboxResult.engine(), retryCount + 1, sandboxResult.exitCode(), sandboxResult.timedOut(), noiseReducedLog);
+            log.warn("TestRunner attempt failed; retry scheduled. taskId={}, nextAttempt={}, exitCode={}, timedOut={}, summary={}",
+                    task.taskId(), retryCount + 1, testResult.exitCode(), testResult.timedOut(), noiseReducedLog);
         }
     }
 

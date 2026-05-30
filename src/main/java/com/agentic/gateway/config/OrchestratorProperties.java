@@ -16,7 +16,8 @@ public record OrchestratorProperties(
         Cursor cursor,
         Aider aider,
         Docker docker,
-        Ollama ollama
+        Ollama ollama,
+        TestRunner testRunner
 ) {
 
     public record Git(
@@ -58,6 +59,12 @@ public record OrchestratorProperties(
     public record Ollama(
             String baseUrl,
             String model,
+            Integer timeoutSeconds
+    ) {
+    }
+
+    public record TestRunner(
+            String image,
             Integer timeoutSeconds
     ) {
     }

@@ -83,6 +83,10 @@ orchestrator:
     base-url: ${OLLAMA_BASE_URL:http://ollama:11434}
     model: ${OLLAMA_MODEL:qwen2.5-coder:1.5b}
     timeout-seconds: ${OLLAMA_TIMEOUT_SECONDS:20}
+  test-runner:
+    # git push 前獨立驗證階段使用的 Maven 測試容器映像檔。
+    image: ${TEST_RUNNER_IMAGE:maven:3.9-eclipse-temurin-17-alpine}
+    timeout-seconds: ${TEST_RUNNER_TIMEOUT_SECONDS:180}
 
 logging:
   level:
