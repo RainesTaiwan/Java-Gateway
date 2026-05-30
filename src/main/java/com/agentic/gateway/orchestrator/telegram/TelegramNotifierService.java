@@ -10,25 +10,25 @@ import org.springframework.web.reactive.function.client.WebClient;
 /**
  * Orchestrator 專用的 Telegram outbound 通知服務。
  *
- * <p>此服務不啟動 polling，只在任務終點透過 Telegram Bot API 回報交付結果。</p>
+ * <p>此服務不啟動 Long Polling，只在任務終點透過 Telegram Bot API 回報交付結果。</p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class TelegramCompletionNotifier {
+public class TelegramNotifierService {
 
     private static final String TELEGRAM_API_BASE_URL = "https://api.telegram.org";
 
     private final TelegramBotProperties telegramBotProperties;
     private final WebClient.Builder webClientBuilder;
 
-    public void sendReport(String chatId, String message) {
+    public void sendMessage(String chatId, String message) {
         if (chatId == null || chatId.isBlank()) {
-            log.debug("Skip Telegram completion notification because chatId is empty.");
+            log.debug("Skip Telegram notification because chatId is empty.");
             return;
         }
         if (telegramBotProperties.token() == null || telegramBotProperties.token().isBlank()) {
-            log.warn("Skip Telegram completion notification because TELEGRAM_BOT_TOKEN is empty. chatId={}", chatId);
+            log.warn("Skip Telegram notification because TELEGRAM_BOT_TOKEN is empty. chatId={}", chatId);
             return;
         }
 
@@ -42,9 +42,9 @@ public class TelegramCompletionNotifier {
                     .retrieve()
                     .bodyToMono(String.class)
                     .block();
-            log.info("Telegram completion notification sent. chatId={}", chatId);
+            log.info("Telegram notification sent. chatId={}", chatId);
         } catch (Exception ex) {
-            log.error("Failed to send Telegram completion notification. chatId={}", chatId, ex);
+            log.error("Failed to send Telegram notification. chatId={}", chatId, ex);
         }
     }
 }

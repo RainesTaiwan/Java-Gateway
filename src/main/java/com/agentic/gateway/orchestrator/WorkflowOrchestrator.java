@@ -8,7 +8,7 @@ import com.agentic.gateway.orchestrator.git.GitSyncService;
 import com.agentic.gateway.orchestrator.github.GitHubProjectSyncService;
 import com.agentic.gateway.orchestrator.ollama.OllamaNoiseReducer;
 import com.agentic.gateway.orchestrator.ollama.TaskSplitterService;
-import com.agentic.gateway.orchestrator.telegram.TelegramCompletionNotifier;
+import com.agentic.gateway.orchestrator.telegram.TelegramNotifierService;
 import com.agentic.gateway.orchestrator.test.TestExecutionResult;
 import com.agentic.gateway.orchestrator.test.TestRunnerService;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +32,8 @@ public class WorkflowOrchestrator {
     private static final int MAX_RETRIES = 3;
     private static final int LOG_SUMMARY_LIMIT = 4_000;
     private static final String RETRY_SPEC_PREFIX = "\n[前次嘗試失敗，請修正以下錯誤]: ";
+    private static final String TELEGRAM_SUCCESS_MESSAGE = "✅ 任務執行成功！代碼已推送到遠端倉庫。測試全數通過。";
+    private static final String TELEGRAM_FAILED_MESSAGE = "❌ 任務執行失敗。已放棄重試。請查看 GitHub 看板與地端 Log。";
 
     private final OrchestratorProperties orchestratorProperties;
     private final GitHubProjectSyncService gitHubProjectSyncService;
@@ -39,7 +41,7 @@ public class WorkflowOrchestrator {
     private final AgentExecutionService agentExecutionService;
     private final OllamaNoiseReducer ollamaNoiseReducer;
     private final TaskSplitterService taskSplitterService;
-    private final TelegramCompletionNotifier telegramCompletionNotifier;
+    private final TelegramNotifierService telegramNotifierService;
     private final TestRunnerService testRunnerService;
 
     /**
@@ -86,10 +88,6 @@ public class WorkflowOrchestrator {
                     transition(task, projectItemId, TaskState.FAILED);
                     log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastExitCode={}, timedOut={}",
                             task.taskId(), attemptNumber, sandboxResult.exitCode(), sandboxResult.timedOut());
-                    sendTelegramReport(
-                            task.telegramChatId(),
-                            "任務執行失敗，Agent 已達最大重試次數。請查看 Orchestrator log 取得詳細原因。"
-                    );
                     return;
                 }
 
@@ -110,11 +108,6 @@ public class WorkflowOrchestrator {
                 log.warn("[交付失敗] taskId={}, 沙盒回傳成功但工作區無任何代碼變更 (git diff 為空)！AI 輸出摘要:\n{}",
                         task.taskId(), outputSummary);
                 transition(task, projectItemId, TaskState.FAILED);
-                sendTelegramReport(
-                        task.telegramChatId(),
-                        "任務執行結束，但 Agent 未偵測到任何實質程式碼修改，交付中止。\n\nAgent 輸出摘要:\n"
-                                + outputSummary
-                );
                 return;
             }
 
@@ -132,17 +125,12 @@ public class WorkflowOrchestrator {
                 } catch (Exception ex) {
                     log.error("[交付失敗] taskId={} 測試已通過，但 commit/push 失敗。", task.taskId(), ex);
                     transition(task, projectItemId, TaskState.FAILED);
-                    sendTelegramReport(
-                            task.telegramChatId(),
-                            "任務已通過測試，但自動 commit/push 失敗，交付中止。"
-                    );
                     return;
                 }
 
                 transition(task, projectItemId, TaskState.SUCCESS);
                 log.info("Orchestrator finished DevTask successfully. taskId={}, attempt={}, agentExitCode={}, testExitCode={}",
                         task.taskId(), attemptNumber, sandboxResult.exitCode(), testResult.exitCode());
-                sendTelegramReport(task.telegramChatId(), "任務交付成功！代碼已通過測試並自動推送到遠端倉庫。");
                 return;
             }
 
@@ -153,10 +141,6 @@ public class WorkflowOrchestrator {
                 transition(task, projectItemId, TaskState.FAILED);
                 log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastTestExitCode={}, timedOut={}",
                         task.taskId(), attemptNumber, testResult.exitCode(), testResult.timedOut());
-                sendTelegramReport(
-                        task.telegramChatId(),
-                        "任務執行失敗，測試已達最大重試次數。請查看 Orchestrator log 取得 Maven 錯誤詳情。"
-                );
                 return;
             }
 
@@ -173,10 +157,12 @@ public class WorkflowOrchestrator {
     private void transition(DevTask task, Optional<String> projectItemId, TaskState nextState) {
         log.info("Task state changed. taskId={}, state={}", task.taskId(), nextState);
         projectItemId.ifPresent(itemId -> gitHubProjectSyncService.updateCardStatus(itemId, nextState));
-    }
 
-    private void sendTelegramReport(String telegramChatId, String message) {
-        telegramCompletionNotifier.sendReport(telegramChatId, message);
+        if (nextState == TaskState.SUCCESS) {
+            telegramNotifierService.sendMessage(task.telegramChatId(), TELEGRAM_SUCCESS_MESSAGE);
+        } else if (nextState == TaskState.FAILED) {
+            telegramNotifierService.sendMessage(task.telegramChatId(), TELEGRAM_FAILED_MESSAGE);
+        }
     }
 
     private String truncateLog(String logs) {
