@@ -54,6 +54,23 @@ class DevTaskTest {
     }
 
     @Test
+    void githubTaskCanCarryDeliveryIdForIdempotency() throws Exception {
+        DevTask task = DevTask.createGitHubTask(
+                TaskSource.GITHUB,
+                TargetEngine.DEFAULT,
+                "GitHub 任務",
+                "PVTI_lADOExample",
+                "delivery-123"
+        );
+
+        String json = objectMapper.writeValueAsString(task);
+        DevTask deserialized = objectMapper.readValue(json, DevTask.class);
+
+        assertThat(json).contains("\"deliveryId\":\"delivery-123\"");
+        assertThat(deserialized.deliveryId()).isEqualTo("delivery-123");
+    }
+
+    @Test
     void deserializeLegacyTaskWithoutTelegramChatId() throws Exception {
         String json = """
                 {
@@ -69,5 +86,6 @@ class DevTaskTest {
         DevTask deserialized = objectMapper.readValue(json, DevTask.class);
 
         assertThat(deserialized.telegramChatId()).isNull();
+        assertThat(deserialized.deliveryId()).isNull();
     }
 }

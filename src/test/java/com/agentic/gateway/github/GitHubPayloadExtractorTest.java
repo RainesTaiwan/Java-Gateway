@@ -3,6 +3,8 @@ package com.agentic.gateway.github;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.util.Optional;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class GitHubPayloadExtractorTest {
@@ -24,12 +26,11 @@ class GitHubPayloadExtractorTest {
                 }
                 """;
 
-        GitHubPayloadExtractor.ExtractionResult result = extractor.extract(payload);
+        Optional<GitHubTaskPayload> result = extractor.extract("projects_v2_item", payload);
 
-        assertThat(result.payload()).isPresent();
-        assertThat(result.nonActionableAction()).isFalse();
-        assertThat(result.payload().get().title()).isEqualTo("Implement orchestrator");
-        assertThat(result.payload().get().projectItemId()).isEqualTo("PVTI_lADOExampleProjectItem");
+        assertThat(result).isPresent();
+        assertThat(result.get().title()).isEqualTo("Implement orchestrator");
+        assertThat(result.get().projectItemId()).isEqualTo("PVTI_lADOExampleProjectItem");
     }
 
     @Test
@@ -49,32 +50,29 @@ class GitHubPayloadExtractorTest {
                 }
                 """;
 
-        GitHubPayloadExtractor.ExtractionResult result = extractor.extract(payload);
+        Optional<GitHubTaskPayload> result = extractor.extract("issues", payload);
 
-        assertThat(result.payload()).isPresent();
-        assertThat(result.nonActionableAction()).isFalse();
-        assertThat(result.payload().get().title()).isEqualTo("Fix webhook sync");
-        assertThat(result.payload().get().projectItemId()).isEqualTo("PVTI_lADOIssueProjectItem");
+        assertThat(result).isPresent();
+        assertThat(result.get().title()).isEqualTo("Fix webhook sync");
+        assertThat(result.get().projectItemId()).isEqualTo("PVTI_lADOIssueProjectItem");
     }
 
     @Test
-    void ignoreClassicProjectCardIdForProjectsV2Sync() {
+    void extractReopenedIssueEvent() {
         String payload = """
                 {
-                  "action": "created",
-                  "project_card": {
-                    "id": 12345,
-                    "note": "Classic card",
-                    "url": "https://api.github.com/projects/columns/cards/12345"
+                  "action": "reopened",
+                  "issue": {
+                    "title": "Reopened issue",
+                    "html_url": "https://github.com/RainesTaiwan/Java-Gateway/issues/17"
                   }
                 }
                 """;
 
-        GitHubPayloadExtractor.ExtractionResult result = extractor.extract(payload);
+        Optional<GitHubTaskPayload> result = extractor.extract("issues", payload);
 
-        assertThat(result.payload()).isPresent();
-        assertThat(result.nonActionableAction()).isFalse();
-        assertThat(result.payload().get().projectItemId()).isNull();
+        assertThat(result).isPresent();
+        assertThat(result.get().title()).isEqualTo("Reopened issue");
     }
 
     @Test
@@ -89,14 +87,47 @@ class GitHubPayloadExtractorTest {
                 }
                 """;
 
-        GitHubPayloadExtractor.ExtractionResult result = extractor.extract(payload);
+        Optional<GitHubTaskPayload> result = extractor.extract("issues", payload);
 
-        assertThat(result.payload()).isEmpty();
-        assertThat(result.nonActionableAction()).isTrue();
+        assertThat(result).isEmpty();
     }
 
     @Test
-    void allowProjectsV2ItemMovedToTodoColumn() {
+    void ignoreLabeledIssueEvent() {
+        String payload = """
+                {
+                  "action": "labeled",
+                  "issue": {
+                    "title": "Labeled issue",
+                    "html_url": "https://github.com/RainesTaiwan/Java-Gateway/issues/18"
+                  }
+                }
+                """;
+
+        Optional<GitHubTaskPayload> result = extractor.extract("issues", payload);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void ignoreEditedIssueEvent() {
+        String payload = """
+                {
+                  "action": "edited",
+                  "issue": {
+                    "title": "Edited issue",
+                    "html_url": "https://github.com/RainesTaiwan/Java-Gateway/issues/19"
+                  }
+                }
+                """;
+
+        Optional<GitHubTaskPayload> result = extractor.extract("issues", payload);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void ignoreProjectsV2ItemEditedEvenWhenMovedToTodoColumn() {
         String payload = """
                 {
                   "action": "edited",
@@ -118,11 +149,9 @@ class GitHubPayloadExtractorTest {
                 }
                 """;
 
-        GitHubPayloadExtractor.ExtractionResult result = extractor.extract(payload);
+        Optional<GitHubTaskPayload> result = extractor.extract("projects_v2_item", payload);
 
-        assertThat(result.payload()).isPresent();
-        assertThat(result.nonActionableAction()).isFalse();
-        assertThat(result.payload().get().title()).isEqualTo("Move to Todo");
+        assertThat(result).isEmpty();
     }
 
     @Test
@@ -148,9 +177,26 @@ class GitHubPayloadExtractorTest {
                 }
                 """;
 
-        GitHubPayloadExtractor.ExtractionResult result = extractor.extract(payload);
+        Optional<GitHubTaskPayload> result = extractor.extract("projects_v2_item", payload);
 
-        assertThat(result.payload()).isEmpty();
-        assertThat(result.nonActionableAction()).isTrue();
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void ignoreUnsupportedEventType() {
+        String payload = """
+                {
+                  "action": "created",
+                  "project_card": {
+                    "id": 12345,
+                    "note": "Classic card",
+                    "url": "https://api.github.com/projects/columns/cards/12345"
+                  }
+                }
+                """;
+
+        Optional<GitHubTaskPayload> result = extractor.extract("project_card", payload);
+
+        assertThat(result).isEmpty();
     }
 }

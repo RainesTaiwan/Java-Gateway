@@ -7,6 +7,7 @@ import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.model.AccessMode;
 import com.github.dockerjava.api.model.Bind;
+import com.github.dockerjava.api.model.Capability;
 import com.github.dockerjava.api.model.Frame;
 import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.Volume;
@@ -22,6 +23,7 @@ import java.io.Closeable;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -43,6 +45,13 @@ import org.springframework.stereotype.Component;
 public class DockerAgentRunner implements Closeable {
 
     private static final int TIMEOUT_EXIT_CODE = 124;
+    private static final long SANDBOX_MEMORY_BYTES = 1_073_741_824L;
+    private static final long SANDBOX_NANO_CPUS = 1_000_000_000L;
+    private static final String SANDBOX_WORKSPACE = "/app/workspace";
+    private static final Map<String, String> SANDBOX_TMPFS = Map.of(
+            "/tmp", "rw,nosuid,nodev,size=256m",
+            "/root", "rw,nosuid,nodev,size=512m"
+    );
 
     private final OrchestratorProperties orchestratorProperties;
     private final DockerClient dockerClient;
@@ -104,10 +113,17 @@ public class DockerAgentRunner implements Closeable {
         HostConfig hostConfig = HostConfig.newHostConfig()
                 .withBinds(new Bind(
                         requireText(orchestratorProperties.workspace().hostPath(), "ORCHESTRATOR_WORKSPACE_HOST_PATH"),
-                        new Volume(spec.workdir()),
+                        new Volume(SANDBOX_WORKSPACE),
                         AccessMode.rw
                 ))
                 .withNetworkMode(requireText(orchestratorProperties.docker().networkName(), "DOCKER_NETWORK_NAME"))
+                .withMemory(SANDBOX_MEMORY_BYTES)
+                .withMemorySwap(SANDBOX_MEMORY_BYTES)
+                .withNanoCPUs(SANDBOX_NANO_CPUS)
+                .withCapDrop(Capability.ALL)
+                .withPrivileged(false)
+                .withReadonlyRootfs(true)
+                .withTmpFs(SANDBOX_TMPFS)
                 .withAutoRemove(false);
 
         return dockerClient.createContainerCmd(image)

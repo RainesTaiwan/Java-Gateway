@@ -14,9 +14,9 @@ import org.springframework.stereotype.Component;
 /**
  * ActiveMQ 任務消費端。
  *
- * <p>採用「先落表、再簽收、後非同步執行」模式：資料庫寫入成功後才 acknowledge，
- * 避免 JVM 崩潰時因過早 ACK 造成任務靜默遺失。編排由
- * {@link WorkflowOrchestrator#processTaskAsync(String)} 在獨立執行緒池處理。</p>
+ * <p>採用 DB-driven 調度：訊息只負責把任務冪等寫入資料庫的 QUEUED 狀態。
+ * 寫入成功後立即 ACK，實際執行交由 {@link WorkflowOrchestrator#processTaskAsync(String)}
+ * 以及啟動恢復器從資料庫重新派發。</p>
  */
 @Slf4j
 @Component
@@ -33,19 +33,23 @@ public class DevTaskConsumer {
 
         try {
             DevTask task = objectMapper.readValue(rawPayload, DevTask.class);
+            DevTaskRecordService.EnqueueResult enqueueResult = devTaskRecordService.enqueueIfAbsent(task);
 
-            // Step A: 落表
-            devTaskRecordService.persistReceived(task);
-            log.info("DevTask persisted before acknowledge. taskId={}, messageId={}",
-                    task.taskId(), message.getJMSMessageID());
+            log.info("DevTask enqueue checked. taskId={}, messageId={}, created={}, existingState={}, shouldDispatch={}",
+                    enqueueResult.taskId(), message.getJMSMessageID(), enqueueResult.created(),
+                    enqueueResult.existingState(), enqueueResult.shouldDispatch());
 
-            // Step B: 簽收
             message.acknowledge();
-            log.info("DevTask message acknowledged after persistence. taskId={}, messageId={}",
-                    task.taskId(), message.getJMSMessageID());
+            log.info("DevTask message acknowledged after DB enqueue decision. taskId={}, messageId={}",
+                    enqueueResult.taskId(), message.getJMSMessageID());
 
-            // Step C: 非同步調度
-            workflowOrchestrator.processTaskAsync(task.taskId().toString());
+            if (enqueueResult.shouldDispatch()) {
+                workflowOrchestrator.processTaskAsync(enqueueResult.taskId());
+                return;
+            }
+
+            log.info("Duplicate DevTask ignored because it is already past QUEUED. taskId={}, state={}",
+                    enqueueResult.taskId(), enqueueResult.existingState());
         } catch (Exception ex) {
             log.error("Failed to consume DevTask message. messageId={}", message.getJMSMessageID(), ex);
             if (ex instanceof JMSException jmsException) {

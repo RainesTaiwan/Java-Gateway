@@ -14,6 +14,11 @@ public enum TaskState {
     RECEIVED,
 
     /**
+     * 任務已可靠寫入資料庫，等待 Orchestrator worker 認領。
+     */
+    QUEUED,
+
+    /**
      * 地端 LLM 正在將原始需求拆解成較小、可執行的子任務計畫。
      */
     PLANNING,

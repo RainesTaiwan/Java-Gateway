@@ -24,9 +24,9 @@ import org.springframework.stereotype.Service;
 public class CursorAgentExecutionService implements AgentExecutionService {
 
     private static final String ENGINE = "cursor";
-    private static final String WORKDIR = "/app";
+    private static final String WORKDIR = "/app/workspace";
     private static final String DELIVERY_PROMPT_TEMPLATE = """
-            You are running inside the local repository mounted at /app.
+            You are running inside the local repository mounted at /app/workspace.
 
             Complete the user's request by directly editing files in this repository.
             Do not only explain what should be changed.

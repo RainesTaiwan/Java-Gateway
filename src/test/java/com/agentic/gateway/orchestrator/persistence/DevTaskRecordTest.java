@@ -24,6 +24,7 @@ class DevTaskRecordTest {
                 "fix the bug",
                 null,
                 "12345",
+                "delivery-123",
                 createdAt
         );
 
@@ -33,11 +34,13 @@ class DevTaskRecordTest {
         assertThat(record.getTaskId()).isEqualTo(taskId.toString());
         assertThat(record.getCurrentState()).isEqualTo(TaskState.RECEIVED);
         assertThat(record.getRetryCount()).isZero();
+        assertThat(record.getDeliveryId()).isEqualTo("delivery-123");
         assertThat(restored.taskId()).isEqualTo(taskId);
         assertThat(restored.source()).isEqualTo(TaskSource.TELEGRAM);
         assertThat(restored.targetEngine()).isEqualTo(TargetEngine.CURSOR);
         assertThat(restored.payload()).isEqualTo("fix the bug");
         assertThat(restored.telegramChatId()).isEqualTo("12345");
+        assertThat(restored.deliveryId()).isEqualTo("delivery-123");
         assertThat(restored.createdAt()).isEqualTo(createdAt);
     }
 }

@@ -7,13 +7,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.ResetCommand;
 import org.eclipse.jgit.api.Status;
+import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.transport.CredentialsProvider;
+import org.eclipse.jgit.transport.PushResult;
+import org.eclipse.jgit.transport.RemoteRefUpdate;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
@@ -93,8 +97,10 @@ public class GitSyncService {
 
     /**
      * 將通過交付檢查的變更 commit 並 push 回遠端分支。
+     *
+     * @return 遠端接受推送後的 commit SHA
      */
-    public void commitAndPush(String taskId) {
+    public Optional<String> commitAndPush(String taskId) {
         Path workspace = Path.of(orchestratorProperties.workspace().containerPath());
         String branch = normalizeBranch(orchestratorProperties.git().branch());
         String message = "chore(ai): auto-implementation for task [" + taskId + "]";
@@ -108,21 +114,51 @@ public class GitSyncService {
                     .addFilepattern(".")
                     .call();
 
-            git.commit()
+            RevCommit commit = git.commit()
                     .setMessage(message)
                     .setAuthor("Java Gateway AI", "java-gateway-ai@users.noreply.github.com")
                     .setCommitter("Java Gateway AI", "java-gateway-ai@users.noreply.github.com")
                     .call();
+            String commitSha = commit.getName();
 
-            git.push()
+            Iterable<PushResult> pushResults = git.push()
                     .setRemote("origin")
                     .setCredentialsProvider(resolveCredentialsProvider())
                     .add("refs/heads/" + branch)
                     .call();
 
-            log.info("Git commit and push completed. taskId={}, branch={}, message={}", taskId, branch, message);
+            validatePushResults(pushResults, taskId, branch, commitSha);
+
+            log.info("Git commit and push completed. taskId={}, branch={}, commitSha={}, message={}",
+                    taskId, branch, commitSha, message);
+            return Optional.of(commitSha);
+        } catch (GitPushException ex) {
+            throw ex;
         } catch (Exception ex) {
-            throw new IllegalStateException("Git commit/push 失敗: " + workspace, ex);
+            throw new GitPushException("Git commit/push 失敗: " + workspace, ex);
+        }
+    }
+
+    private void validatePushResults(Iterable<PushResult> pushResults, String taskId, String branch, String commitSha) {
+        boolean sawRemoteUpdate = false;
+        for (PushResult pushResult : pushResults) {
+            for (RemoteRefUpdate update : pushResult.getRemoteUpdates()) {
+                sawRemoteUpdate = true;
+                RemoteRefUpdate.Status status = update.getStatus();
+                if (status == RemoteRefUpdate.Status.OK || status == RemoteRefUpdate.Status.UP_TO_DATE) {
+                    log.info("Git push remote ref accepted. taskId={}, branch={}, commitSha={}, remoteRef={}, status={}",
+                            taskId, branch, commitSha, update.getRemoteName(), status);
+                    continue;
+                }
+
+                throw new GitPushException("Git push rejected. taskId=%s, branch=%s, commitSha=%s, remoteRef=%s, status=%s, message=%s"
+                        .formatted(taskId, branch, commitSha, update.getRemoteName(), status, update.getMessage()));
+            }
+        }
+
+        if (!sawRemoteUpdate) {
+            throw new GitPushException("Git push returned no remote ref updates. taskId=%s, branch=%s, commitSha=%s"
+                    .formatted(taskId, branch, commitSha));
         }
     }
 

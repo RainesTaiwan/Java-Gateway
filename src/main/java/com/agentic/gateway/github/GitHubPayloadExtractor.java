@@ -20,84 +20,44 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class GitHubPayloadExtractor {
 
-    private static final String TODO_COLUMN_NAME = "Todo";
+    private static final String EVENT_ISSUES = "issues";
+    private static final String EVENT_PROJECTS_V2_ITEM = "projects_v2_item";
+    private static final String ACTION_OPENED = "opened";
+    private static final String ACTION_REOPENED = "reopened";
+    private static final String ACTION_CREATED = "created";
 
     private final ObjectMapper objectMapper;
 
-    public ExtractionResult extract(String rawPayload) {
+    public Optional<GitHubTaskPayload> extract(String eventType, String rawPayload) {
         try {
             JsonNode root = objectMapper.readTree(rawPayload);
-            if (!isActionableEvent(root)) {
-                log.info("Webhook ignored: Action not actionable.");
-                return ExtractionResult.nonActionable();
+            String normalizedEventType = normalize(eventType);
+            String action = root.path("action").asText("");
+
+            if (!isActionableEvent(normalizedEventType, action)) {
+                log.info("Webhook ignored: Event '{}' with action '{}' is not actionable.",
+                        normalizedEventType, action);
+                return Optional.empty();
             }
 
-            Optional<GitHubTaskPayload> payload = extractProjectsV2Issue(root)
-                    .or(() -> extractIssue(root))
-                    .or(() -> extractClassicProjectCard(root));
-            return payload.map(ExtractionResult::found).orElseGet(ExtractionResult::notFound);
+            return switch (normalizedEventType) {
+                case EVENT_ISSUES -> extractIssue(root);
+                case EVENT_PROJECTS_V2_ITEM -> extractProjectsV2Issue(root);
+                default -> Optional.empty();
+            };
         } catch (Exception ex) {
             log.warn("Ignored malformed GitHub webhook payload.", ex);
-            return ExtractionResult.notFound();
+            return Optional.empty();
         }
     }
 
-    private boolean isActionableEvent(JsonNode root) {
-        if (!root.path("projects_v2_item").isMissingNode() && !root.path("projects_v2_item").isNull()) {
-            return isProjectsV2Actionable(root);
-        }
-        if (!root.path("issue").isMissingNode() && !root.path("issue").isNull()) {
-            return isIssueActionable(root.path("action").asText(""));
-        }
-        if (!root.path("project_card").isMissingNode() && !root.path("project_card").isNull()) {
-            return isClassicProjectCardActionable(root.path("action").asText(""));
-        }
-        return false;
-    }
-
-    private boolean isIssueActionable(String action) {
-        return switch (action) {
-            case "opened", "labeled", "unlabeled" -> true;
+    private boolean isActionableEvent(String eventType, String action) {
+        String normalizedAction = normalize(action);
+        return switch (eventType) {
+            case EVENT_ISSUES -> ACTION_OPENED.equals(normalizedAction) || ACTION_REOPENED.equals(normalizedAction);
+            case EVENT_PROJECTS_V2_ITEM -> ACTION_CREATED.equals(normalizedAction);
             default -> false;
         };
-    }
-
-    private boolean isProjectsV2Actionable(JsonNode root) {
-        String action = root.path("action").asText("");
-        return switch (action) {
-            case "created" -> true;
-            case "edited" -> isMovedToTodoColumn(root);
-            default -> false;
-        };
-    }
-
-    private boolean isClassicProjectCardActionable(String action) {
-        return switch (action) {
-            case "created", "moved" -> true;
-            default -> false;
-        };
-    }
-
-    private boolean isMovedToTodoColumn(JsonNode root) {
-        JsonNode toNode = root.path("changes").path("field_value").path("to");
-        if (toNode.isMissingNode() || toNode.isNull()) {
-            return false;
-        }
-
-        if (isTodoColumnName(toNode.path("name").asText(""))) {
-            return true;
-        }
-
-        JsonNode singleSelectOption = toNode.path("single_select_option");
-        if (!singleSelectOption.isMissingNode() && !singleSelectOption.isNull()) {
-            return isTodoColumnName(singleSelectOption.path("name").asText(""));
-        }
-
-        return false;
-    }
-
-    private boolean isTodoColumnName(String name) {
-        return TODO_COLUMN_NAME.equalsIgnoreCase(name.trim());
     }
 
     private Optional<GitHubTaskPayload> extractIssue(JsonNode root) {
@@ -123,17 +83,6 @@ public class GitHubPayloadExtractor {
         String url = firstNonBlank(contentNode.path("url").asText(""), contentNode.path("html_url").asText(""));
         String projectItemId = extractProjectItemId(root).orElse(null);
         return toPayload(title, url, projectItemId);
-    }
-
-    private Optional<GitHubTaskPayload> extractClassicProjectCard(JsonNode root) {
-        JsonNode projectCard = root.path("project_card");
-        if (projectCard.isMissingNode() || projectCard.isNull()) {
-            return Optional.empty();
-        }
-
-        String title = firstNonBlank(projectCard.path("note").asText(""), projectCard.path("name").asText(""));
-        String url = firstNonBlank(projectCard.path("content_url").asText(""), projectCard.path("url").asText(""));
-        return toPayload(title, url, null);
     }
 
     private Optional<GitHubTaskPayload> toPayload(String title, String url, String projectItemId) {
@@ -212,18 +161,7 @@ public class GitHubPayloadExtractor {
         return first == null || first.isBlank() ? second : first;
     }
 
-    public record ExtractionResult(Optional<GitHubTaskPayload> payload, boolean nonActionableAction) {
-
-        public static ExtractionResult found(GitHubTaskPayload payload) {
-            return new ExtractionResult(Optional.of(payload), false);
-        }
-
-        public static ExtractionResult nonActionable() {
-            return new ExtractionResult(Optional.empty(), true);
-        }
-
-        public static ExtractionResult notFound() {
-            return new ExtractionResult(Optional.empty(), false);
-        }
+    private String normalize(String value) {
+        return value == null ? "" : value.trim().toLowerCase();
     }
 }

@@ -44,6 +44,8 @@ services:
       # Docker-outside-of-Docker：Java Orchestrator 透過宿主機 Docker Engine 動態啟動 Aider 沙盒。
       # 注意：這等同授予容器控制 Host Docker 的高權限，只應在可信任開發機使用。
       - /var/run/docker.sock:/var/run/docker.sock
+      # 任務狀態資料庫，讓 Gateway 容器重建後仍可恢復 QUEUED / RUNNING 等未終局任務。
+      - ./data:/app/data
     depends_on:
       activemq:
         condition: service_started

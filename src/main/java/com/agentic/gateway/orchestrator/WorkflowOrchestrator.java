@@ -5,16 +5,17 @@ import com.agentic.gateway.dto.DevTask;
 import com.agentic.gateway.orchestrator.agent.AgentExecutionRegistry;
 import com.agentic.gateway.orchestrator.agent.AgentExecutionResult;
 import com.agentic.gateway.orchestrator.agent.AgentExecutionService;
+import com.agentic.gateway.orchestrator.events.TaskStateChangedEvent;
 import com.agentic.gateway.orchestrator.git.GitSyncService;
-import com.agentic.gateway.orchestrator.github.GitHubProjectSyncService;
 import com.agentic.gateway.orchestrator.ollama.OllamaNoiseReducer;
 import com.agentic.gateway.orchestrator.ollama.TaskSplitterService;
 import com.agentic.gateway.orchestrator.persistence.DevTaskRecordService;
-import com.agentic.gateway.orchestrator.telegram.TelegramNotifierService;
 import com.agentic.gateway.orchestrator.test.TestExecutionResult;
 import com.agentic.gateway.orchestrator.test.TestRunnerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -35,18 +36,15 @@ public class WorkflowOrchestrator {
     private static final int MAX_RETRIES = 3;
     private static final int LOG_SUMMARY_LIMIT = 4_000;
     private static final String RETRY_SPEC_PREFIX = "\n[前次嘗試失敗，請修正以下錯誤]: ";
-    private static final String TELEGRAM_SUCCESS_MESSAGE = "✅ 任務執行成功！代碼已推送到遠端倉庫。測試全數通過。";
-    private static final String TELEGRAM_FAILED_MESSAGE = "❌ 任務執行失敗。已放棄重試。請查看 GitHub 看板與地端 Log。";
 
     private final OrchestratorProperties orchestratorProperties;
-    private final GitHubProjectSyncService gitHubProjectSyncService;
     private final GitSyncService gitSyncService;
     private final AgentExecutionRegistry agentExecutionRegistry;
     private final OllamaNoiseReducer ollamaNoiseReducer;
     private final TaskSplitterService taskSplitterService;
-    private final TelegramNotifierService telegramNotifierService;
     private final TestRunnerService testRunnerService;
     private final DevTaskRecordService devTaskRecordService;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * 非同步派發開發任務，與 JMS listener 執行緒分離。
@@ -61,123 +59,174 @@ public class WorkflowOrchestrator {
      */
     public void processTask(String taskId) {
         DevTask task = devTaskRecordService.loadDevTask(taskId);
+        TaskState currentState = devTaskRecordService.loadState(taskId);
+        if (isTerminal(currentState)) {
+            log.info("Skip DevTask because it is already terminal. taskId={}, state={}", taskId, currentState);
+            return;
+        }
 
         log.info("Orchestrator received DevTask. taskId={}, source={}, targetEngine={}",
                 task.taskId(), task.source(), task.targetEngine());
         log.info("DevTask payload preview. taskId={}, payload={}", task.taskId(), truncateLog(task.payload()));
 
-        Optional<String> projectItemId = Optional.ofNullable(task.projectItemId())
-                .filter(id -> !id.isBlank());
-        if (projectItemId.isEmpty()) {
+        if (task.projectItemId() == null || task.projectItemId().isBlank()) {
             log.info("[INFO] Task source is Telegram, skipping GitHub project card sync.");
         }
 
-        transition(taskId, task, projectItemId, TaskState.RECEIVED);
-        transition(taskId, task, projectItemId, TaskState.PLANNING);
-        String plannedSpec = taskSplitterService.splitTask(task.payload());
-        log.info("Task split plan generated. taskId={}, plan=\n{}", task.taskId(), truncateLog(plannedSpec));
+        try {
+            transition(taskId, task, TaskState.PLANNING);
+            String plannedSpec = taskSplitterService.splitTask(task.payload());
+            log.info("Task split plan generated. taskId={}, plan=\n{}", task.taskId(), truncateLog(plannedSpec));
 
-        transition(taskId, task, projectItemId, TaskState.IN_PROGRESS);
+            transition(taskId, task, TaskState.IN_PROGRESS);
 
-        // 第一次嘗試前重置為遠端乾淨基線；後續 retry 保留髒工作區讓開發引擎接續修正。
-        gitSyncService.syncRepository();
+            if (shouldSyncCleanBaseline(currentState)) {
+                log.info("Syncing Git workspace to clean remote baseline. taskId={}, previousState={}",
+                        task.taskId(), currentState);
+                gitSyncService.syncRepository();
+            } else {
+                log.warn("Skip Git workspace sync for recovered task to preserve existing changes. taskId={}, previousState={}",
+                        task.taskId(), currentState);
+            }
 
-        DevTask currentAttempt = taskWithPlannedSpec(task, plannedSpec);
-        int retryCount = 0;
+            DevTask currentAttempt = taskWithPlannedSpec(task, plannedSpec);
+            int retryCount = devTaskRecordService.loadRetryCount(taskId);
 
-        AgentExecutionService agentExecutionService = agentExecutionRegistry.resolve(task.targetEngine());
+            AgentExecutionService agentExecutionService = agentExecutionRegistry.resolve(task.targetEngine());
 
-        while (true) {
-            int attemptNumber = retryCount + 1;
-            transition(taskId, task, projectItemId, TaskState.RUNNING);
-            log.info("Starting agent attempt. taskId={}, targetEngine={}, engine={}, attempt={}, maxRetries={}",
-                    task.taskId(), task.targetEngine(), agentExecutionService.engineName(), attemptNumber, MAX_RETRIES);
+            while (true) {
+                int attemptNumber = retryCount + 1;
+                transition(taskId, task, TaskState.RUNNING);
+                log.info("Starting agent attempt. taskId={}, targetEngine={}, engine={}, attempt={}, maxRetries={}",
+                        task.taskId(), task.targetEngine(), agentExecutionService.engineName(), attemptNumber, MAX_RETRIES);
 
-            AgentExecutionResult sandboxResult = agentExecutionService.runAgent(currentAttempt);
+                AgentExecutionResult sandboxResult = agentExecutionService.runAgent(currentAttempt);
 
-            if (!sandboxResult.isSuccess()) {
+                if (!sandboxResult.isSuccess()) {
+                    if (retryCount >= MAX_RETRIES) {
+                        transition(taskId, task, TaskState.FAILED);
+                        log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastExitCode={}, timedOut={}",
+                                task.taskId(), attemptNumber, sandboxResult.exitCode(), sandboxResult.timedOut());
+                        return;
+                    }
+
+                    retryCount++;
+                    devTaskRecordService.updateRetryCount(taskId, retryCount);
+                    transition(taskId, task, TaskState.RETRYING);
+
+                    String noiseReducedLog = ollamaNoiseReducer.reduceNoise(sandboxResult.logs());
+                    currentAttempt = taskWithRetryContext(currentAttempt, noiseReducedLog);
+                    log.warn("Agent attempt failed; retry scheduled. taskId={}, engine={}, nextAttempt={}, exitCode={}, timedOut={}, summary={}",
+                            task.taskId(), sandboxResult.engine(), retryCount + 1, sandboxResult.exitCode(),
+                            sandboxResult.timedOut(), noiseReducedLog);
+                    continue;
+                }
+
+                boolean hasDiff = gitSyncService.hasChanges(orchestratorProperties.workspace().containerPath());
+                if (!hasDiff) {
+                    String outputSummary = truncateLog(sandboxResult.logs());
+                    log.warn("[交付失敗] taskId={}, 沙盒回傳成功但工作區無任何代碼變更 (git diff 為空)！AI 輸出摘要:\n{}",
+                            task.taskId(), outputSummary);
+                    transition(taskId, task, TaskState.FAILED);
+                    return;
+                }
+
+                transition(taskId, task, TaskState.VERIFYING);
+                log.info("[測試驗證] taskId={} Agent 已產生變更，啟動獨立 TestRunner 容器執行 mvn test。", task.taskId());
+
+                TestExecutionResult testResult = testRunnerService.runTests(task);
+
+                if (testResult.isSuccess()) {
+                    log.info("[交付核實] taskId={} 測試通過。Agent 輸出摘要:\n{}",
+                            task.taskId(), truncateLog(sandboxResult.logs()));
+
+                    Optional<String> commitSha;
+                    try {
+                        commitSha = gitSyncService.commitAndPush(task.taskId().toString());
+                    } catch (Exception ex) {
+                        log.error("[交付失敗] taskId={} 測試已通過，但 commit/push 失敗。", task.taskId(), ex);
+                        transition(taskId, task, TaskState.FAILED);
+                        return;
+                    }
+
+                    if (commitSha.isEmpty()) {
+                        log.error("[交付失敗] taskId={} push 未回傳 commit SHA，不允許切換 SUCCESS。", task.taskId());
+                        transition(taskId, task, TaskState.FAILED);
+                        return;
+                    }
+
+                    String deliverySummary = "agentExitCode=%d, testExitCode=%d, attempt=%d"
+                            .formatted(sandboxResult.exitCode(), testResult.exitCode(), attemptNumber);
+                    transition(taskId, task, TaskState.SUCCESS, commitSha.get(), deliverySummary);
+                    log.info("Orchestrator finished DevTask successfully. taskId={}, attempt={}, agentExitCode={}, testExitCode={}, commitSha={}",
+                            task.taskId(), attemptNumber, sandboxResult.exitCode(), testResult.exitCode(), commitSha.get());
+                    return;
+                }
+
+                log.warn("[測試失敗] taskId={}, testExitCode={}, timedOut={}, mavenLogSummary=\n{}",
+                        task.taskId(), testResult.exitCode(), testResult.timedOut(), truncateLog(testResult.logs()));
+
                 if (retryCount >= MAX_RETRIES) {
-                    transition(taskId, task, projectItemId, TaskState.FAILED);
-                    log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastExitCode={}, timedOut={}",
-                            task.taskId(), attemptNumber, sandboxResult.exitCode(), sandboxResult.timedOut());
+                    transition(taskId, task, TaskState.FAILED);
+                    log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastTestExitCode={}, timedOut={}",
+                            task.taskId(), attemptNumber, testResult.exitCode(), testResult.timedOut());
                     return;
                 }
 
                 retryCount++;
                 devTaskRecordService.updateRetryCount(taskId, retryCount);
-                transition(taskId, task, projectItemId, TaskState.RETRYING);
+                transition(taskId, task, TaskState.RETRYING);
 
-                String noiseReducedLog = ollamaNoiseReducer.reduceNoise(sandboxResult.logs());
+                String noiseReducedLog = ollamaNoiseReducer.reduceNoise(testResult.logs());
                 currentAttempt = taskWithRetryContext(currentAttempt, noiseReducedLog);
-                log.warn("Agent attempt failed; retry scheduled. taskId={}, engine={}, nextAttempt={}, exitCode={}, timedOut={}, summary={}",
-                        task.taskId(), sandboxResult.engine(), retryCount + 1, sandboxResult.exitCode(),
-                        sandboxResult.timedOut(), noiseReducedLog);
-                continue;
+                log.warn("TestRunner attempt failed; retry scheduled. taskId={}, nextAttempt={}, exitCode={}, timedOut={}, summary={}",
+                        task.taskId(), retryCount + 1, testResult.exitCode(), testResult.timedOut(), noiseReducedLog);
             }
-
-            boolean hasDiff = gitSyncService.hasChanges(orchestratorProperties.workspace().containerPath());
-            if (!hasDiff) {
-                String outputSummary = truncateLog(sandboxResult.logs());
-                log.warn("[交付失敗] taskId={}, 沙盒回傳成功但工作區無任何代碼變更 (git diff 為空)！AI 輸出摘要:\n{}",
-                        task.taskId(), outputSummary);
-                transition(taskId, task, projectItemId, TaskState.FAILED);
-                return;
-            }
-
-            transition(taskId, task, projectItemId, TaskState.VERIFYING);
-            log.info("[測試驗證] taskId={} Agent 已產生變更，啟動獨立 TestRunner 容器執行 mvn test。", task.taskId());
-
-            TestExecutionResult testResult = testRunnerService.runTests(task);
-
-            if (testResult.isSuccess()) {
-                log.info("[交付核實] taskId={} 測試通過。Agent 輸出摘要:\n{}",
-                        task.taskId(), truncateLog(sandboxResult.logs()));
-
-                try {
-                    gitSyncService.commitAndPush(task.taskId().toString());
-                } catch (Exception ex) {
-                    log.error("[交付失敗] taskId={} 測試已通過，但 commit/push 失敗。", task.taskId(), ex);
-                    transition(taskId, task, projectItemId, TaskState.FAILED);
-                    return;
-                }
-
-                transition(taskId, task, projectItemId, TaskState.SUCCESS);
-                log.info("Orchestrator finished DevTask successfully. taskId={}, attempt={}, agentExitCode={}, testExitCode={}",
-                        task.taskId(), attemptNumber, sandboxResult.exitCode(), testResult.exitCode());
-                return;
-            }
-
-            log.warn("[測試失敗] taskId={}, testExitCode={}, timedOut={}, mavenLogSummary=\n{}",
-                    task.taskId(), testResult.exitCode(), testResult.timedOut(), truncateLog(testResult.logs()));
-
-            if (retryCount >= MAX_RETRIES) {
-                transition(taskId, task, projectItemId, TaskState.FAILED);
-                log.error("DevTask failed after maximum retries. taskId={}, attempts={}, lastTestExitCode={}, timedOut={}",
-                        task.taskId(), attemptNumber, testResult.exitCode(), testResult.timedOut());
-                return;
-            }
-
-            retryCount++;
-            devTaskRecordService.updateRetryCount(taskId, retryCount);
-            transition(taskId, task, projectItemId, TaskState.RETRYING);
-
-            String noiseReducedLog = ollamaNoiseReducer.reduceNoise(testResult.logs());
-            currentAttempt = taskWithRetryContext(currentAttempt, noiseReducedLog);
-            log.warn("TestRunner attempt failed; retry scheduled. taskId={}, nextAttempt={}, exitCode={}, timedOut={}, summary={}",
-                    task.taskId(), retryCount + 1, testResult.exitCode(), testResult.timedOut(), noiseReducedLog);
+        } catch (ObjectOptimisticLockingFailureException ex) {
+            log.warn("DevTask state update lost optimistic lock; another worker likely owns this task. taskId={}",
+                    task.taskId(), ex);
+        } catch (Exception ex) {
+            log.error("DevTask crashed during orchestration; marking FAILED. taskId={}", task.taskId(), ex);
+            transition(taskId, task, TaskState.FAILED);
         }
     }
 
-    private void transition(String taskId, DevTask task, Optional<String> projectItemId, TaskState nextState) {
+    private void transition(String taskId, DevTask task, TaskState nextState) {
         devTaskRecordService.updateState(taskId, nextState);
         log.info("Task state changed. taskId={}, state={}", task.taskId(), nextState);
-        projectItemId.ifPresent(itemId -> gitHubProjectSyncService.updateCardStatus(itemId, nextState));
+        eventPublisher.publishEvent(new TaskStateChangedEvent(taskId, task, nextState, null, null));
+    }
 
-        if (nextState == TaskState.SUCCESS) {
-            telegramNotifierService.sendMessage(task.telegramChatId(), TELEGRAM_SUCCESS_MESSAGE);
-        } else if (nextState == TaskState.FAILED) {
-            telegramNotifierService.sendMessage(task.telegramChatId(), TELEGRAM_FAILED_MESSAGE);
-        }
+    private void transition(
+            String taskId,
+            DevTask task,
+            TaskState nextState,
+            String commitSha,
+            String resultSummary
+    ) {
+        DevTaskRecordService.DeliveryResult deliveryResult = devTaskRecordService.updateStateWithDeliveryResult(
+                taskId,
+                nextState,
+                commitSha,
+                resultSummary
+        );
+        log.info("Task state changed. taskId={}, state={}, commitSha={}",
+                task.taskId(), nextState, deliveryResult.commitSha());
+        eventPublisher.publishEvent(new TaskStateChangedEvent(
+                taskId,
+                task,
+                nextState,
+                deliveryResult.commitSha(),
+                deliveryResult.resultSummary()
+        ));
+    }
+
+    private boolean isTerminal(TaskState state) {
+        return state == TaskState.SUCCESS || state == TaskState.FAILED;
+    }
+
+    private boolean shouldSyncCleanBaseline(TaskState currentState) {
+        return currentState == TaskState.QUEUED;
     }
 
     private String truncateLog(String logs) {
@@ -211,6 +260,7 @@ public class WorkflowOrchestrator {
                 optimizedPayload,
                 task.projectItemId(),
                 task.telegramChatId(),
+                task.deliveryId(),
                 task.createdAt()
         );
     }
@@ -225,6 +275,7 @@ public class WorkflowOrchestrator {
                 retryPayload,
                 task.projectItemId(),
                 task.telegramChatId(),
+                task.deliveryId(),
                 task.createdAt()
         );
     }

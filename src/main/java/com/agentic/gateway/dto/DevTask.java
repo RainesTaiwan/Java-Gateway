@@ -12,6 +12,7 @@ import java.util.UUID;
  * @param payload      使用者指令、Issue 標題或 Issue URL 等任務內容
  * @param projectItemId GitHub Projects v2 item node ID；Telegram 任務允許為 null
  * @param telegramChatId Telegram chat ID；非 Telegram 來源任務允許為 null
+ * @param deliveryId GitHub X-GitHub-Delivery ID；非 GitHub 來源任務允許為 null
  * @param createdAt    Gateway 建立任務的 UTC 時間
  */
 public record DevTask(
@@ -21,6 +22,7 @@ public record DevTask(
         String payload,
         String projectItemId,
         String telegramChatId,
+        String deliveryId,
         Instant createdAt
 ) {
 
@@ -28,7 +30,7 @@ public record DevTask(
      * 建立新任務，統一由 Gateway 產生 UUID 與時間戳。
      */
     public static DevTask create(TaskSource source, TargetEngine targetEngine, String payload) {
-        return create(source, targetEngine, payload, null, null);
+        return create(source, targetEngine, payload, null, null, null);
     }
 
     /**
@@ -38,7 +40,20 @@ public record DevTask(
      * 對應看板卡片，因此可繼續使用不帶 {@code projectItemId} 的 {@link #create(TaskSource, TargetEngine, String)}。</p>
      */
     public static DevTask create(TaskSource source, TargetEngine targetEngine, String payload, String projectItemId) {
-        return create(source, targetEngine, payload, projectItemId, null);
+        return create(source, targetEngine, payload, projectItemId, null, null);
+    }
+
+    /**
+     * 建立帶有 GitHub delivery id 的任務，用於 webhook 冪等去重。
+     */
+    public static DevTask createGitHubTask(
+            TaskSource source,
+            TargetEngine targetEngine,
+            String payload,
+            String projectItemId,
+            String deliveryId
+    ) {
+        return create(source, targetEngine, payload, projectItemId, null, deliveryId);
     }
 
     /**
@@ -51,6 +66,26 @@ public record DevTask(
             String projectItemId,
             String telegramChatId
     ) {
-        return new DevTask(UUID.randomUUID(), source, targetEngine, payload, projectItemId, telegramChatId, Instant.now());
+        return create(source, targetEngine, payload, projectItemId, telegramChatId, null);
+    }
+
+    public static DevTask create(
+            TaskSource source,
+            TargetEngine targetEngine,
+            String payload,
+            String projectItemId,
+            String telegramChatId,
+            String deliveryId
+    ) {
+        return new DevTask(
+                UUID.randomUUID(),
+                source,
+                targetEngine,
+                payload,
+                projectItemId,
+                telegramChatId,
+                deliveryId,
+                Instant.now()
+        );
     }
 }

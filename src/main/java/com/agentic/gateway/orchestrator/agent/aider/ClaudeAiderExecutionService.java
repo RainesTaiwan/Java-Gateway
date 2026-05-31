@@ -19,7 +19,9 @@ import org.springframework.stereotype.Service;
 public class ClaudeAiderExecutionService implements AgentExecutionService {
 
     private static final String ENGINE = "claude-aider";
-    private static final String WORKDIR = "/app";
+    private static final String WORKDIR = "/app/workspace";
+    /** paulgauthier/aider 映像預設 entrypoint；覆寫為 sh -lc 時不在 PATH 內。 */
+    private static final String AIDER_BIN = "/venv/bin/aider";
 
     private final OrchestratorProperties orchestratorProperties;
     private final DockerAgentRunner dockerAgentRunner;
@@ -52,7 +54,7 @@ public class ClaudeAiderExecutionService implements AgentExecutionService {
     private String buildAiderCommand(DevTask task) {
         String message = "根據以下 Spec 修改程式碼:\n" + (task.payload() == null ? "" : task.payload());
         return "cd " + shellQuote(WORKDIR)
-                + " && aider --yes-always --model "
+                + " && " + AIDER_BIN + " --yes-always --model "
                 + shellQuote(orchestratorProperties.aider().model())
                 + " --message " + shellQuote(message);
     }
