@@ -1,0 +1,16 @@
+target/
+*.log
+.idea/
+*.iml
+
+# 本機敏感設定檔，請勿提交 Telegram token、GitHub webhook secret 或 broker 密碼。
+.env
+.env.*
+!.env.example
+src/main/resources/application-local.yml
+src/main/resources/application-secret.yml
+src/main/resources/application-*.local.yml
+
+# Host 端 runtime 資料：Ollama 模型與 Orchestrator/Aider Git 工作目錄。
+.ollama_data/
+workspace/

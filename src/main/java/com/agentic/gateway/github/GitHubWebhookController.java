@@ -1,0 +1,76 @@
+package com.agentic.gateway.github;
+
+import com.agentic.gateway.dto.DevTask;
+import com.agentic.gateway.dto.TargetEngine;
+import com.agentic.gateway.dto.TaskSource;
+import com.agentic.gateway.jms.DevTaskPublisher;
+import com.agentic.gateway.orchestrator.persistence.DevTaskRecordService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * GitHub Webhook REST 接收端。
+ *
+ * <p>安全驗證失敗時立即回傳 401，且不解析 payload、不建立任務、不進入佇列。</p>
+ */
+@Slf4j
+@RestController
+@RequiredArgsConstructor
+@RequestMapping("/api/webhooks")
+public class GitHubWebhookController {
+
+    private final GitHubSignatureVerifier signatureVerifier;
+    private final GitHubPayloadExtractor payloadExtractor;
+    private final DevTaskPublisher devTaskPublisher;
+    private final DevTaskRecordService devTaskRecordService;
+
+    @PostMapping("/github")
+    public ResponseEntity<Void> receiveGitHubWebhook(
+            @RequestHeader(value = "X-Hub-Signature-256", required = false) String signature,
+            @RequestHeader("X-GitHub-Event") String eventType,
+            @RequestHeader("X-GitHub-Delivery") String deliveryId,
+            @RequestBody String rawPayload
+    ) {
+        if (!signatureVerifier.isValid(signature, rawPayload)) {
+            log.warn("Rejected GitHub webhook because signature verification failed. event={}", eventType);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        return payloadExtractor.extract(eventType, rawPayload)
+                .map(payload -> {
+                    boolean queued = publishGitHubTask(payload, deliveryId);
+                    return queued
+                            ? ResponseEntity.accepted().<Void>build()
+                            : ResponseEntity.ok().<Void>build();
+                })
+                .orElseGet(() -> ResponseEntity.ok().build());
+    }
+
+    private boolean publishGitHubTask(GitHubTaskPayload payload, String deliveryId) {
+        DevTask task = DevTask.createGitHubTask(
+                TaskSource.GITHUB,
+                TargetEngine.DEFAULT,
+                payload.toTaskText(),
+                payload.projectItemId(),
+                deliveryId
+        );
+        DevTaskRecordService.EnqueueResult enqueueResult = devTaskRecordService.reserveGitHubDeliveryIfAbsent(task);
+        if (!enqueueResult.created()) {
+            return false;
+        }
+
+        devTaskPublisher.publishAsync(task)
+                .exceptionally(ex -> {
+                    log.error("Failed to publish GitHub DevTask. taskId={}", task.taskId(), ex);
+                    return null;
+                });
+        return true;
+    }
+}

@@ -1,0 +1,97 @@
+services:
+  activemq:
+    image: rmohr/activemq:5.15.9
+    container_name: java-gateway-activemq
+    # 僅在 compose 內網開放，避免與本機已運行的 ActiveMQ (61616/8161) 衝突。
+    expose:
+      - "61616"
+      - "8161"
+    environment:
+      ACTIVEMQ_ADMIN_LOGIN: admin
+      ACTIVEMQ_ADMIN_PASSWORD: admin
+
+  # 僅用於 build Cursor SDK runner 映像；容器啟動後立即結束，不常駐。
+  cursor-runner:
+    build:
+      context: ./docker/cursor-runner
+    image: java-gateway-cursor-runner:latest
+    entrypoint: ["true"]
+    restart: "no"
+
+  java-gateway:
+    build: .
+    container_name: java-gateway-app
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      ACTIVEMQ_BROKER_URL: tcp://activemq:61616
+      ACTIVEMQ_USER: admin
+      ACTIVEMQ_PASSWORD: admin
+      # 未來 Orchestrator 需要呼叫地端 LLM 做 log 降噪時，直接走 Compose 內網服務名。
+      OLLAMA_BASE_URL: http://ollama:11434
+      # 預設使用 Cursor；改為 aider 時需設定 CLAUDE_API_KEY。
+      AGENT_ENGINE: ${AGENT_ENGINE:-cursor}
+      CURSOR_RUNNER_IMAGE: ${CURSOR_RUNNER_IMAGE:-java-gateway-cursor-runner:latest}
+      GIT_REPOSITORY_URI: ${GIT_REPOSITORY_URI:-}
+      GIT_BRANCH: ${GIT_BRANCH:-master}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      # Host 端實體 Git 工作區；未來 Java Orchestrator 可在此 git clone / pull，
+      # 並把同一路徑掛載給拋棄式 Aider sandbox。
+      - ./workspace:/app/workspace
+      # Docker-outside-of-Docker：Java Orchestrator 透過宿主機 Docker Engine 動態啟動 Aider 沙盒。
+      # 注意：這等同授予容器控制 Host Docker 的高權限，只應在可信任開發機使用。
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 任務狀態資料庫，讓 Gateway 容器重建後仍可恢復 QUEUED / RUNNING 等未終局任務。
+      - ./data:/app/data
+    depends_on:
+      activemq:
+        condition: service_started
+      cursor-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: java-gateway-ollama
+    ports:
+      # 對 Host 開放，方便本機 curl / CLI 除錯。
+      - "11434:11434"
+    env_file:
+      - .env
+    environment:
+      # 讓 Ollama API 可被 Host port mapping 與 Compose 內其他服務連線。
+      OLLAMA_HOST: 0.0.0.0:11434
+      # 4GB VRAM 環境建議先用小模型做 log 降噪與摘要。
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:1.5b}
+    volumes:
+      # 模型資料持久化，避免每次重建容器都重新下載模型。
+      - ./.ollama_data:/root/.ollama
+      - ./scripts/ollama-entrypoint.sh:/ollama-entrypoint.sh:ro
+    entrypoint: ["sh", "/ollama-entrypoint.sh"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # Docker Compose 官方 GPU 宣告；需 Host 已安裝 NVIDIA Container Toolkit。
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+    restart: unless-stopped
+
+  localtunnel:
+    image: node:18-alpine
+    container_name: java-gateway-localtunnel
+    working_dir: /tunnel
+    # LocalTunnel 與 java-gateway 位於同一個 Compose 網路，必須用服務名 java-gateway。
+    # subdomain 是全球共用命名空間；若被占用會改配隨機網址，entrypoint 會印 WARN。
+    volumes:
+      - ./scripts/localtunnel-entrypoint.sh:/tunnel/localtunnel-entrypoint.sh:ro
+    command: ["sh", "/tunnel/localtunnel-entrypoint.sh"]
+    env_file:
+      - .env
+    depends_on:
+      - java-gateway
+    restart: unless-stopped

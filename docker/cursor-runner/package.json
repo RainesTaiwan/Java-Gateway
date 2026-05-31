@@ -1,0 +1,8 @@
+{
+  "name": "java-gateway-cursor-runner",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cursor/sdk": "latest"
+  }
+}

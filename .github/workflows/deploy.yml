@@ -1,0 +1,29 @@
+name: 🎉 CI/CD Target Deployment
+
+on:
+  push:
+    branches:
+      - master  # 🔴 只有當 master 分支有 Code 進來時（不論是 Telegram 幫你 Push 的，還是你手動 Merge 的）才會觸發
+
+jobs:
+  deploy-to-host:
+    runs-on: self-hosted  # 🟢 指定在你剛剛安裝了 Runner 的這台 Ubuntu 機器上執行
+    
+    steps:
+      - name: 🚀 執行地端升級與 Docker 重啟
+        run: |
+          echo "偵測到 master 分支更新，啟動自動部署..."
+          
+          # 1. 切換到你的專案目錄
+          cd "/home/raines/git/Java Gateway"
+          
+          # 2. 強制切換到 master 分支並拉取最新代碼
+          git checkout master
+          git fetch origin master
+          git reset --hard origin/master
+          
+          # 3. 執行 Docker 容器重啟與重新編譯
+          docker compose down
+          docker compose up --build -d
+          
+          echo "✅ CI/CD 流程順利完成，系統已重啟！"
